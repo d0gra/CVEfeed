@@ -174,4 +174,8 @@ are parsed or merged.
 
 ## License
 
-MIT
+GNU General Public License v3.0 or later - see [LICENSE](LICENSE).
+
+That covers this code. The vulnerability data it fetches stays under its own
+sources' terms: NVD and CISA KEV are US government works in the public domain,
+GitHub Advisories are CC-BY-4.0, and EUVD is published under ENISA's terms.

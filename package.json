@@ -21,7 +21,7 @@
     "security",
     "dashboard"
   ],
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "private": true,
   "dependencies": {
     "compression": "^1.7.5",
