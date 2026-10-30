@@ -91,4 +91,23 @@ export async function fetchItems() {
   return items;
 }
 
-export default { meta, fetchItems };
+/**
+ * EUVD has no by-CVE endpoint, so search by text and keep only records whose
+ * aliases actually contain the CVE - the search is fuzzy enough to return
+ * neighbours otherwise.
+ */
+export async function lookupById(cveId) {
+  const data = await fetchJson(
+    `${BASE}/search?text=${encodeURIComponent(cveId)}&size=10`,
+    { retries: 1 },
+  );
+  const items = Array.isArray(data?.items) ? data.items : [];
+  const wanted = cveId.toUpperCase();
+
+  return items
+    .map((entry) => normalize(entry))
+    .filter(Boolean)
+    .filter((item) => item.cveId?.toUpperCase() === wanted);
+}
+
+export default { meta, fetchItems, lookupById };

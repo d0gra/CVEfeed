@@ -17,6 +17,10 @@ Built to drop onto Hostinger's Node.js hosting with `npm install` + `npm start`.
 | [GitHub Security Advisories](https://github.com/advisories) | Package/ecosystem detail, EPSS, fast publication | Optional token |
 | [EUVD (ENISA)](https://euvd.enisa.europa.eu/) | EU vulnerability database, EPSS, independent scoring | None |
 
+Any CVE identifier can be searched, including ones older than the feed window:
+if it is not in the window, the sources are queried directly and the replies are
+merged the same way. See [Search](#search).
+
 Records describing the same vulnerability are **merged by CVE ID**: the highest
 CVSS wins, EPSS and CWEs are unioned, every source keeps its own permalink, and
 exploitation status is carried over from KEV. CISA advisories also enrich the
@@ -35,6 +39,27 @@ Open <http://localhost:3000>.
 The first boot fetches all five feeds (roughly 20–30 seconds, mostly NVD) and
 warms the cache in the background, so the dashboard is responsive immediately
 and fully populated shortly after.
+
+## Search
+
+Free-text search (`cisco`, `CWE-190`, a package name) filters the current
+window. A **CVE identifier** is treated differently: if it is not in the window,
+`NVD`, `CISA KEV`, `GitHub` and `EUVD` are each asked for that one CVE in
+parallel and the answers are merged by the same rules the feed uses, so
+Log4Shell resolves as readily as something published this morning.
+
+```bash
+curl 'localhost:3000/api/feed?q=CVE-2021-44228'
+curl 'localhost:3000/api/cve/CVE-2021-44228'
+```
+
+Looked-up records are marked `outsideWindow` and labelled in the UI. They are
+cached for six hours, since an old CVE rarely changes. The KEV catalog is
+already held in full, so exploitation status, ransomware use and the federal
+remediation deadline come back for any CVE at no extra request.
+
+Full-text search across every CVE ever published is deliberately *not*
+supported: that needs an index, which means the database this app avoids.
 
 ## Dashboard
 
@@ -80,7 +105,7 @@ All endpoints return JSON.
 | `GET /api/feed` | Merged, filtered, paginated feed with stats and source health |
 | `GET /api/stats` | Summary counts only |
 | `GET /api/sources` | Configured sources and their metadata |
-| `GET /api/cve/:id` | One record by CVE, GHSA, EUVD or advisory ID |
+| `GET /api/cve/:id` | One record by CVE, GHSA, EUVD or advisory ID, falling back to a direct source lookup |
 | `POST /api/refresh` | Force a refetch (requires `REFRESH_TOKEN`) |
 | `GET /healthz` | Liveness and cache age |
 
@@ -102,6 +127,29 @@ instructions (shared/cloud Node.js hosting and VPS).
 Short version for Hostinger Node.js hosting: upload the repo, set
 **Application startup file** to `app.js`, run Install Dependencies, then Start.
 Nothing else to configure.
+
+## Updating a deployment
+
+The **data** looks after itself: a background timer refreshes every
+`REFRESH_INTERVAL_MINUTES`, and any request arriving after the TTL has expired
+triggers a refetch. Stale data is only ever served when upstream is failing, and
+it is flagged when that happens.
+
+On shared hosting the app is suspended when idle, which stops the timer. The
+feed still refreshes on the next visit, but that visitor waits for the fetch
+(~25s cold). The cron entry in [DEPLOY-HOSTINGER.md](DEPLOY-HOSTINGER.md) running
+`npm run warm` every 20 minutes keeps the cache inside its TTL so nobody does.
+
+The **code** needs a restart to take effect:
+
+```bash
+git pull && npm install --omit=dev && rm -rf .cache && pm2 reload cvefeed
+```
+
+On Hostinger Node.js hosting that is Git → Pull, then **Restart** on the Node.js
+page. The restart is what re-stamps the asset URLs; without it browsers keep
+cached CSS/JS. Clearing `.cache` matters only when an update changes how records
+are parsed or merged.
 
 ## Notes
 

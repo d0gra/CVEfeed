@@ -92,4 +92,20 @@ export async function fetchItems() {
   return items;
 }
 
-export default { meta, fetchItems };
+/** Advisories that reference one CVE. */
+export async function lookupById(cveId) {
+  const headers = {
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+  if (config.githubToken) headers.Authorization = `Bearer ${config.githubToken}`;
+
+  const response = await fetchWithRetry(
+    `${API}?cve_id=${encodeURIComponent(cveId)}&per_page=10`,
+    { headers, retries: 1 },
+  );
+  const batch = await response.json();
+  return Array.isArray(batch) ? batch.map(normalize).filter(Boolean) : [];
+}
+
+export default { meta, fetchItems, lookupById };

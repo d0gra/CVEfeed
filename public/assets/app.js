@@ -6,6 +6,14 @@ const SEVERITIES = [
   { id: 'none', label: 'Unscored' },
 ];
 
+const SEV_SHORT = {
+  critical: 'crit',
+  high: 'high',
+  medium: 'med',
+  low: 'low',
+  none: 'n/s',
+};
+
 const SOURCE_LABELS = {
   nvd: 'NVD',
   kev: 'CISA KEV',
@@ -124,47 +132,49 @@ function renderSources(sources = []) {
         ? `${escapeHtml(s.label)} — ${s.count} records in ${s.durationMs}ms`
         : `${escapeHtml(s.label)} — unavailable: ${escapeHtml(s.error ?? 'error')}`;
       return `<span class="src" data-ok="${s.ok}" title="${title}">
-        <span class="src-dot"></span><b>${escapeHtml(s.name)}</b>
-        ${s.ok ? `<span>${s.count}</span>` : '<span>offline</span>'}
+        <b>${escapeHtml(s.name)}</b><i>${s.ok ? s.count : 'down'}</i>
       </span>`;
     })
     .join('');
 }
 
 function renderStats(stats) {
-  const tiles = [
-    { label: 'Tracked', value: stats.total, tone: 'var(--accent)', hint: 'matching filters' },
-    { label: 'Exploited', value: stats.exploited, tone: 'var(--exploited)', hint: 'in CISA KEV', filter: 'exploited' },
-    { label: 'Critical', value: stats.bySeverity.critical ?? 0, tone: 'var(--critical)', hint: 'CVSS 9.0+', filter: 'critical' },
-    { label: 'High', value: stats.bySeverity.high ?? 0, tone: 'var(--high)', hint: 'CVSS 7.0–8.9', filter: 'high' },
-    { label: 'New', value: stats.last24h, tone: 'var(--low)', hint: 'last 24 hours' },
-    { label: 'Avg CVSS', value: stats.averageScore ?? '—', tone: 'var(--medium)', hint: 'of scored items' },
+  const figures = [
+    { label: 'Tracked', value: stats.total },
+    { label: 'Exploited', value: stats.exploited, filter: 'exploited' },
+    { label: 'Critical', value: stats.bySeverity.critical ?? 0, filter: 'critical' },
+    { label: 'High', value: stats.bySeverity.high ?? 0, filter: 'high' },
+    { label: 'New today', value: stats.last24h },
+    {
+      label: 'Mean CVSS',
+      value: Number.isFinite(stats.averageScore) ? stats.averageScore.toFixed(1) : '—',
+    },
   ];
 
-  dom.stats.innerHTML = tiles
-    .map((t) => {
+  dom.stats.innerHTML = figures
+    .map((f) => {
       const active =
-        t.filter === 'exploited' ? state.exploited : t.filter ? state.severity.has(t.filter) : false;
-      const interactive = Boolean(t.filter);
-      return `<${interactive ? 'button type="button"' : 'div'}
-        class="stat${interactive ? ' is-clickable' : ''}"
-        style="--tone:${t.tone}"
-        ${interactive ? `data-filter="${t.filter}" aria-pressed="${active}"` : ''}>
-        <p class="stat-label">${t.label}</p>
-        <p class="stat-value">${escapeHtml(t.value)}</p>
-        <p class="stat-hint">${t.hint}</p>
-      </${interactive ? 'button' : 'div'}>`;
+        f.filter === 'exploited' ? state.exploited : f.filter ? state.severity.has(f.filter) : false;
+      const tag = f.filter ? 'button' : 'div';
+      const attrs = f.filter
+        ? ` type="button" data-filter="${f.filter}" aria-pressed="${active}"`
+        : '';
+      return `<${tag} class="figure"${attrs}>
+        <span class="figure-value">${escapeHtml(
+          typeof f.value === 'number' ? f.value.toLocaleString() : f.value,
+        )}</span>
+        <span class="figure-label">${f.label}</span>
+      </${tag}>`;
     })
     .join('');
 }
 
 function renderChips(stats) {
-  dom.severityChips.innerHTML = SEVERITIES.map((s) => {
-    const count = stats?.bySeverity?.[s.id] ?? 0;
-    return `<button type="button" class="chip" style="--tone:var(--${s.id})"
-      data-severity="${s.id}" aria-pressed="${state.severity.has(s.id)}">
-      ${s.label}<span class="chip-count">${count}</span>
-    </button>`;
+  dom.severityChips.innerHTML = SEVERITIES.map((sev) => {
+    const count = stats?.bySeverity?.[sev.id] ?? 0;
+    return `<button type="button" class="chip" style="--tone:var(--${sev.id})"
+      data-severity="${sev.id}" data-empty="${count === 0}"
+      aria-pressed="${state.severity.has(sev.id)}">${sev.label}<b>${count}</b></button>`;
   }).join('');
 
   const sourceIds = Object.keys(SOURCE_LABELS).filter(
@@ -173,87 +183,92 @@ function renderChips(stats) {
   dom.sourceChips.innerHTML = sourceIds
     .map((id) => {
       const count = stats?.bySource?.[id] ?? 0;
-      return `<button type="button" class="chip" data-source="${id}" aria-pressed="${state.source.has(id)}">
-        ${escapeHtml(SOURCE_LABELS[id])}<span class="chip-count">${count}</span>
-      </button>`;
+      return `<button type="button" class="chip" data-source="${id}" data-empty="${count === 0}"
+        aria-pressed="${state.source.has(id)}">${escapeHtml(SOURCE_LABELS[id])}<b>${count}</b></button>`;
     })
     .join('');
 }
 
 function metaLine(item) {
-  const bits = [];
-  bits.push(`<span title="${escapeHtml(fullDate(item.published))}">🕑 ${relativeTime(item.published)}</span>`);
-  if (item.vendor) bits.push(`<span>🏷 ${escapeHtml(item.vendor)}</span>`);
-  if (item.product) bits.push(`<span>📦 ${escapeHtml(item.product)}</span>`);
-  if (item.cwes?.length) bits.push(`<span>⚠ ${escapeHtml(item.cwes.slice(0, 3).join(', '))}</span>`);
-  if (item.status) bits.push(`<span>● ${escapeHtml(item.status)}</span>`);
+  const bits = [`<span class="id">${escapeHtml(
+    item.cveId ?? item.ghsaId ?? item.advisoryId ?? item.id,
+  )}</span>`];
+
+  bits.push(...badges(item));
+  bits.push(`<span title="${escapeHtml(fullDate(item.published))}">${relativeTime(item.published)}</span>`);
+
+  const subject = [item.vendor, item.product].filter(Boolean).join(' · ');
+  if (subject) bits.push(`<span>${escapeHtml(subject)}</span>`);
+  if (item.cwes?.length) bits.push(`<span>${escapeHtml(item.cwes.slice(0, 2).join(', '))}</span>`);
+
   return bits.join('');
 }
 
 function badges(item) {
   const out = [];
-  if (item.exploited) out.push('<span class="tag tag-exploited">Exploited</span>');
-  if (item.kev?.ransomware) out.push('<span class="tag tag-ransomware">Ransomware</span>');
-  if (item.kind === 'advisory') out.push('<span class="tag tag-advisory">Advisory</span>');
+  if (item.exploited) out.push('<span class="flag">Exploited</span>');
+  if (item.kev?.ransomware) out.push('<span class="flag flag-ransom">Ransomware</span>');
+  if (item.kind === 'advisory') out.push('<span class="flag flag-quiet">Advisory</span>');
   if (Number.isFinite(item.epss) && item.epss >= 1) {
-    out.push(`<span class="tag tag-epss">EPSS ${item.epss.toFixed(1)}%</span>`);
+    out.push(`<span class="flag flag-quiet">EPSS ${item.epss.toFixed(1)}%</span>`);
   }
-  if (item.tags?.includes('cisa-advisory') && item.kind !== 'advisory') {
-    out.push('<span class="tag tag-advisory">In CISA advisory</span>');
-  }
-  return out.join('');
+  if (item.outsideWindow) out.push('<span class="flag flag-quiet">Looked up</span>');
+  return out;
 }
 
 function detailHtml(item) {
   const blocks = [];
 
   if (item.description) {
-    blocks.push(`<div class="detail-block"><h4>Description</h4><p>${escapeHtml(item.description)}</p></div>`);
+    blocks.push(`<p class="lede">${escapeHtml(item.description)}</p>`);
   }
 
   if (item.kev) {
-    const rows = [
-      item.kev.dateAdded ? `Added to KEV ${fullDate(item.kev.dateAdded)}` : null,
-      item.kev.dueDate ? `Federal remediation due ${fullDate(item.kev.dueDate)}` : null,
-      item.kev.ransomware ? 'Known use in ransomware campaigns' : null,
+    const terms = [
+      item.kev.dateAdded ? `Catalogued ${fullDate(item.kev.dateAdded)}` : null,
+      item.kev.dueDate ? `Federal deadline ${fullDate(item.kev.dueDate)}` : null,
+      item.kev.ransomware ? 'Used in ransomware campaigns' : null,
     ].filter(Boolean);
-    blocks.push(`<div class="kev-box">
-      <h4>⚡ Known exploited vulnerability</h4>
-      ${rows.length ? `<p>${rows.map(escapeHtml).join(' · ')}</p>` : ''}
-      ${item.kev.requiredAction ? `<p><strong>Required action:</strong> ${escapeHtml(item.kev.requiredAction)}</p>` : ''}
+
+    blocks.push(`<div class="kev">
+      <h4>Known exploited</h4>
+      ${terms.length ? `<p class="terms">${terms.map(escapeHtml).join(' · ')}</p>` : ''}
+      ${item.kev.requiredAction ? `<p>${escapeHtml(item.kev.requiredAction)}</p>` : ''}
     </div>`);
   }
 
-  const kv = [
-    ['CVSS', item.score !== null ? `${item.score} (v${escapeHtml(item.scoreVersion ?? '?')})` : 'Not yet scored'],
-    ['EPSS', Number.isFinite(item.epss) ? `${item.epss}% likelihood` : '—'],
+  const facts = [
+    ['CVSS', item.score !== null ? `${item.score} · v${escapeHtml(item.scoreVersion ?? '?')}` : 'Unscored'],
+    ['EPSS', Number.isFinite(item.epss) ? `${item.epss}%` : '—'],
     ['Published', fullDate(item.published)],
-    ['Last modified', fullDate(item.modified)],
-    item.cwes?.length ? ['Weaknesses', escapeHtml(item.cwes.join(', '))] : null,
+    ['Updated', fullDate(item.modified)],
+    item.cwes?.length ? ['Weakness', escapeHtml(item.cwes.join(', '))] : null,
     item.assigner ? ['Assigner', escapeHtml(item.assigner)] : null,
   ].filter(Boolean);
 
-  blocks.push(`<div class="detail-block"><h4>Assessment</h4><dl class="kv">${kv
-    .map(([k, v]) => `<div class="kv-item"><dt>${k}</dt><dd>${v}</dd></div>`)
+  blocks.push(`<div class="block"><h4>Assessment</h4><dl class="facts">${facts
+    .map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`)
     .join('')}</dl></div>`);
 
   if (item.vector) {
-    blocks.push(`<div class="detail-block"><h4>CVSS vector</h4><p class="vector">${escapeHtml(item.vector)}</p></div>`);
+    blocks.push(`<div class="block"><h4>Vector</h4><p class="vector">${escapeHtml(item.vector)}</p></div>`);
   }
 
   const links = Object.entries(item.links ?? {}).filter(([, url]) => url);
   if (links.length) {
-    blocks.push(`<div class="detail-block"><h4>Open at source</h4><div class="links-row">${links
+    blocks.push(`<div class="block"><h4>At the source</h4><div class="outlinks">${links
       .map(
         ([id, url]) =>
-          `<a class="link-btn" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(SOURCE_LABELS[id] ?? id)} ↗</a>`,
+          `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
+            SOURCE_LABELS[id] ?? id,
+          )}</a>`,
       )
       .join('')}</div></div>`);
   }
 
-  const refs = (item.references ?? []).filter((r) => r.url).slice(0, 8);
+  const refs = (item.references ?? []).filter((r) => r.url).slice(0, 6);
   if (refs.length) {
-    blocks.push(`<div class="detail-block"><h4>References</h4><ul class="ref-list">${refs
+    blocks.push(`<div class="block"><h4>References</h4><ul class="refs">${refs
       .map(
         (r) =>
           `<li><a href="${escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.url)}</a></li>`,
@@ -267,28 +282,23 @@ function detailHtml(item) {
 function cardHtml(item) {
   const sev = item.severity ?? 'none';
   const isOpen = expanded.has(item.key);
-  const scoreText = item.score !== null && item.score !== undefined ? item.score.toFixed(1) : '—';
+  const score = item.score !== null && item.score !== undefined ? item.score.toFixed(1) : '—';
 
-  return `<li class="card" data-exploited="${item.exploited}" data-open="${isOpen}" data-key="${escapeHtml(item.key)}">
-    <button type="button" class="card-head" aria-expanded="${isOpen}">
-      <span class="score" style="--tone:var(--${sev})">
-        <span class="score-num">${scoreText}</span>
-        <span class="score-sev">${sev === 'none' ? 'n/a' : escapeHtml(sev)}</span>
+  return `<li class="entry" data-open="${isOpen}" data-key="${escapeHtml(item.key)}">
+    <button type="button" class="entry-head" aria-expanded="${isOpen}">
+      <span class="mark" style="--tone:var(--${sev === 'none' ? 'unscored' : sev})">
+        <span class="mark-score">${score}</span>
+        <span class="mark-sev">${escapeHtml(SEV_SHORT[sev] ?? sev)}</span>
       </span>
-      <span class="card-body">
-        <span class="card-id">
-          <span class="cve-id">${escapeHtml(item.cveId ?? item.ghsaId ?? item.advisoryId ?? item.id)}</span>
-          ${badges(item)}
-        </span>
-        <h3 class="card-title">${escapeHtml(item.title)}</h3>
-        <span class="card-meta">${metaLine(item)}</span>
+      <span class="entry-body">
+        <h3 class="entry-title">${escapeHtml(item.title)}</h3>
+        <span class="entry-meta">${metaLine(item)}</span>
       </span>
-      <span class="src-pills">
-        ${(item.sourceIds ?? []).map((id) => `<span class="src-pill">${escapeHtml(SOURCE_LABELS[id] ?? id)}</span>`).join('')}
-        <span class="chev">▶</span>
-      </span>
+      <span class="entry-sources">${(item.sourceIds ?? [])
+        .map((id) => escapeHtml(SOURCE_LABELS[id] ?? id))
+        .join(' · ')}</span>
     </button>
-    ${isOpen ? `<div class="card-detail">${detailHtml(item)}</div>` : ''}
+    ${isOpen ? `<div class="detail">${detailHtml(item)}</div>` : ''}
   </li>`;
 }
 
@@ -299,24 +309,45 @@ function renderPager(meta) {
   }
   dom.pager.hidden = false;
   dom.pager.innerHTML = `
-    <button type="button" class="btn" data-page="${meta.page - 1}" ${meta.page <= 1 ? 'disabled' : ''}>← Prev</button>
-    <span class="pager-info">Page ${meta.page} of ${meta.pages}</span>
-    <button type="button" class="btn" data-page="${meta.page + 1}" ${meta.page >= meta.pages ? 'disabled' : ''}>Next →</button>`;
+    <button type="button" class="quiet" data-page="${meta.page - 1}" ${meta.page <= 1 ? 'disabled' : ''}>← Previous</button>
+    <span class="pager-info">${meta.page} / ${meta.pages}</span>
+    <button type="button" class="quiet" data-page="${meta.page + 1}" ${meta.page >= meta.pages ? 'disabled' : ''}>Next →</button>`;
 }
 
 function renderBanner(meta) {
-  document.querySelectorAll('.banner').forEach((n) => n.remove());
-  const offline = (lastPayload?.sources ?? []).filter((s) => !s.ok);
-  const messages = [];
-  if (meta?.stale) messages.push('Showing the last good snapshot — a refresh from upstream failed.');
-  if (offline.length) messages.push(`Unavailable right now: ${offline.map((s) => s.name).join(', ')}.`);
-  if (!messages.length) return;
+  document.querySelectorAll('.notice').forEach((n) => n.remove());
 
-  const banner = document.createElement('div');
-  banner.className = 'banner';
-  banner.dataset.kind = meta?.stale ? 'error' : 'warn';
-  banner.textContent = messages.join(' ');
-  dom.results.prepend(banner);
+  const notes = [];
+
+  // A CVE resolved outside the feed window is worth saying out loud.
+  if (meta?.lookup?.sources) {
+    const answered = meta.lookup.sources.filter((s) => s.ok && s.count > 0).map((s) => s.name);
+    notes.push({
+      kind: 'found',
+      text: answered.length
+        ? `Outside the current window — looked up at ${answered.join(', ')}.`
+        : 'Outside the current window — looked up at the source.',
+    });
+  } else if (meta?.lookup?.error) {
+    notes.push({ kind: 'error', text: `Direct lookup failed: ${meta.lookup.error}` });
+  }
+
+  if (meta?.stale) {
+    notes.push({ kind: 'error', text: 'Showing the last good snapshot — refreshing from upstream failed.' });
+  }
+
+  const offline = (lastPayload?.sources ?? []).filter((s) => !s.ok);
+  if (offline.length) {
+    notes.push({ kind: 'warn', text: `Unavailable: ${offline.map((s) => s.name).join(', ')}.` });
+  }
+
+  for (const note of notes.reverse()) {
+    const el = document.createElement('div');
+    el.className = 'notice';
+    el.dataset.kind = note.kind;
+    el.textContent = note.text;
+    dom.results.prepend(el);
+  }
 }
 
 function renderFeed(payload) {
@@ -331,17 +362,22 @@ function renderFeed(payload) {
   dom.feed.innerHTML = items.map(cardHtml).join('');
   dom.empty.hidden = items.length > 0;
 
-  const shown = items.length ? `${(meta.page - 1) * meta.limit + 1}–${(meta.page - 1) * meta.limit + items.length}` : '0';
-  const noun = meta.total === 1 ? 'vulnerability' : 'vulnerabilities';
-  dom.resultsCount.textContent = `${meta.total.toLocaleString()} ${noun} · showing ${shown}`;
-  dom.resultsNote.textContent = `${meta.totalUnfiltered.toLocaleString()} in the current window · sorted by ${meta.sort}`;
+  const from = (meta.page - 1) * meta.limit + 1;
+  const to = (meta.page - 1) * meta.limit + items.length;
+  const noun = meta.total === 1 ? 'disclosure' : 'disclosures';
+
+  dom.resultsCount.textContent = meta.total
+    ? `${meta.total.toLocaleString()} ${noun}`
+    : 'Nothing matching';
+  dom.resultsNote.textContent = meta.total
+    ? `Showing ${from}–${to} · ${meta.sort}`
+    : `${meta.totalUnfiltered.toLocaleString()} in the window`;
 
   renderPager(meta);
   dom.results.setAttribute('aria-busy', 'false');
 
-  const label = meta.stale ? 'stale' : meta.fromCache ? 'cached' : 'fresh';
   dom.statusDot.dataset.state = meta.stale ? 'stale' : 'ok';
-  dom.freshnessText.textContent = `Updated ${relativeTime(meta.generatedAt)} · ${label}`;
+  dom.freshnessText.textContent = `Updated ${relativeTime(meta.generatedAt)}`;
 }
 
 /* ---------- data ---------- */
@@ -368,9 +404,9 @@ async function load({ showSkeletons = false } = {}) {
   if (showSkeletons) {
     dom.feed.innerHTML = '';
     dom.empty.hidden = true;
-    dom.skeletons.innerHTML = '<div class="skel"></div>'.repeat(6);
+    dom.skeletons.innerHTML = '<div class="skel"></div>'.repeat(7);
     dom.statusDot.dataset.state = 'loading';
-    dom.freshnessText.textContent = 'Fetching feeds…';
+    dom.freshnessText.textContent = 'Fetching';
   }
 
   try {
@@ -385,17 +421,17 @@ async function load({ showSkeletons = false } = {}) {
     if (error.name === 'AbortError') return;
     dom.skeletons.innerHTML = '';
     dom.statusDot.dataset.state = 'error';
-    dom.freshnessText.textContent = 'Feed unavailable';
-    dom.resultsCount.textContent = 'Could not load the feed';
+    dom.freshnessText.textContent = 'Unavailable';
+    dom.resultsCount.textContent = 'Could not load';
     dom.resultsNote.textContent = '';
     dom.feed.innerHTML = '';
     dom.empty.hidden = true;
-    document.querySelectorAll('.banner').forEach((n) => n.remove());
-    const banner = document.createElement('div');
-    banner.className = 'banner';
-    banner.dataset.kind = 'error';
-    banner.textContent = `${error.message}. The upstream feeds may be rate-limiting; retrying shortly.`;
-    dom.results.prepend(banner);
+    document.querySelectorAll('.notice').forEach((n) => n.remove());
+    const note = document.createElement('div');
+    note.className = 'notice';
+    note.dataset.kind = 'error';
+    note.textContent = `${error.message}. The upstream registers may be rate-limiting; it will retry.`;
+    dom.results.prepend(note);
   } finally {
     if (inFlight === controller) inFlight = null;
   }
@@ -468,9 +504,9 @@ dom.stats.addEventListener('click', (event) => {
 });
 
 dom.feed.addEventListener('click', (event) => {
-  const head = event.target.closest('.card-head');
+  const head = event.target.closest('.entry-head');
   if (!head) return;
-  const card = head.closest('.card');
+  const card = head.closest('.entry');
   const key = card.dataset.key;
   const item = lastPayload?.items.find((candidate) => candidate.key === key);
   if (!item) return;
@@ -479,13 +515,13 @@ dom.feed.addEventListener('click', (event) => {
     expanded.delete(key);
     card.dataset.open = 'false';
     head.setAttribute('aria-expanded', 'false');
-    card.querySelector('.card-detail')?.remove();
+    card.querySelector('.detail')?.remove();
   } else {
     expanded.add(key);
     card.dataset.open = 'true';
     head.setAttribute('aria-expanded', 'true');
     const detail = document.createElement('div');
-    detail.className = 'card-detail';
+    detail.className = 'detail';
     detail.innerHTML = detailHtml(item);
     card.append(detail);
   }
@@ -517,9 +553,15 @@ dom.reset.addEventListener('click', () => {
   apply();
 });
 
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  // The label names the mode the button switches to, not the current one.
+  dom.theme.textContent = theme === 'dark' ? 'Light' : 'Dark';
+}
+
 dom.theme.addEventListener('click', () => {
   const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-  document.documentElement.dataset.theme = next;
+  applyTheme(next);
   try { localStorage.setItem('cvefeed-theme', next); } catch { /* private mode */ }
 });
 
@@ -542,9 +584,10 @@ function syncControls() {
 /* ---------- boot ---------- */
 
 try {
-  const saved = localStorage.getItem('cvefeed-theme');
-  if (saved) document.documentElement.dataset.theme = saved;
-} catch { /* private mode */ }
+  applyTheme(localStorage.getItem('cvefeed-theme') || 'dark');
+} catch {
+  applyTheme('dark');
+}
 
 readUrl();
 syncControls();
@@ -554,8 +597,7 @@ load({ showSkeletons: true });
 // Keep the relative timestamps honest, and pick up new server-side data.
 setInterval(() => {
   if (lastPayload?.meta?.generatedAt) {
-    const label = lastPayload.meta.stale ? 'stale' : 'cached';
-    dom.freshnessText.textContent = `Updated ${relativeTime(lastPayload.meta.generatedAt)} · ${label}`;
+    dom.freshnessText.textContent = `Updated ${relativeTime(lastPayload.meta.generatedAt)}`;
   }
 }, 30_000);
 

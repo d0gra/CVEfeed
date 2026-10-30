@@ -1,3 +1,4 @@
+import { cached } from '../lib/cache.js';
 import { fetchJson } from '../lib/http.js';
 import { toIso, toPlainText } from '../lib/text.js';
 
@@ -55,4 +56,15 @@ export async function fetchItems() {
   return (data.vulnerabilities ?? []).map(normalize).filter(Boolean);
 }
 
-export default { meta, fetchItems };
+/**
+ * The whole catalog is a single cached document, so a lookup costs nothing
+ * beyond the fetch the feed already performs - exploitation status is
+ * available for any CVE, however old.
+ */
+export async function lookupById(cveId) {
+  const items = await cached('kev-catalog', fetchItems);
+  const wanted = cveId.toUpperCase();
+  return items.value.filter((item) => item.cveId?.toUpperCase() === wanted);
+}
+
+export default { meta, fetchItems, lookupById };

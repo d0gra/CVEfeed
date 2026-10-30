@@ -121,4 +121,14 @@ export async function fetchItems() {
   return items;
 }
 
-export default { meta, fetchItems };
+/** Fetch one CVE directly, for lookups outside the feed window. */
+export async function lookupById(cveId) {
+  const headers = config.nvdApiKey ? { apiKey: config.nvdApiKey } : {};
+  const data = await fetchJson(`${API}?cveId=${encodeURIComponent(cveId)}`, {
+    headers,
+    retries: 1,
+  });
+  return (data.vulnerabilities ?? []).map(normalize).filter(Boolean);
+}
+
+export default { meta, fetchItems, lookupById };

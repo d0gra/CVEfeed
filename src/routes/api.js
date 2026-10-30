@@ -2,6 +2,7 @@ import { Router } from 'express';
 import config from '../config.js';
 import { comparators, getFeed } from '../aggregate.js';
 import { SEVERITY_ORDER } from '../lib/severity.js';
+import { isCveId, lookupCve } from '../lookup.js';
 import { enabledSources } from '../sources/index.js';
 
 const router = Router();
@@ -117,6 +118,23 @@ router.get('/feed', async (req, res, next) => {
     const page = Math.max(int(req.query.page, 1), 1);
     const start = (page - 1) * limit;
 
+    // The feed only covers a recent window. If someone searched for a specific
+    // CVE that is not in it, ask the sources directly rather than returning
+    // nothing - this is the most common thing a visitor types.
+    let lookup = null;
+    const term = String(req.query.q ?? '').trim();
+    if (sorted.length === 0 && isCveId(term)) {
+      try {
+        const found = await lookupCve(term);
+        if (found.value.item) {
+          lookup = { sources: found.value.sources, lookedUpAt: found.value.lookedUpAt };
+          sorted.push(found.value.item);
+        }
+      } catch (error) {
+        lookup = { error: error.message };
+      }
+    }
+
     res.json({
       meta: {
         ...feedMeta(feed),
@@ -126,6 +144,7 @@ router.get('/feed', async (req, res, next) => {
         page,
         limit,
         pages: Math.max(Math.ceil(sorted.length / limit), 1),
+        ...(lookup ? { lookup } : {}),
       },
       stats: summarize(sorted),
       sources: feed.value.sources,
@@ -169,11 +188,20 @@ router.get('/cve/:id', async (req, res, next) => {
         candidate.advisoryId?.toLowerCase() === needle,
     );
 
-    if (!item) {
-      return res.status(404).json({ error: 'Not found in the current feed window.' });
+    if (item) return res.json({ meta: feedMeta(feed), item });
+
+    if (isCveId(req.params.id)) {
+      const found = await lookupCve(req.params.id);
+      if (found.value.item) {
+        return res.json({
+          meta: { ...feedMeta(feed), lookup: { sources: found.value.sources, lookedUpAt: found.value.lookedUpAt } },
+          item: found.value.item,
+        });
+      }
+      return res.status(404).json({ error: `${req.params.id} was not found at any source.` });
     }
 
-    res.json({ meta: feedMeta(feed), item });
+    res.status(404).json({ error: 'Not found in the current feed window.' });
   } catch (error) {
     next(error);
   }
