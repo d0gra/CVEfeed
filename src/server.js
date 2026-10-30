@@ -163,6 +163,19 @@ export function createApp() {
 export function start() {
   const app = createApp();
 
+  // A platform that assigns a port does it through PORT. Setting that variable
+  // to an empty string - easy to do when a deploy form asks for every key it
+  // found in .env.example - silently shadows the assignment, and the app then
+  // listens somewhere the proxy is not looking. The symptom is a 502 with
+  // nothing wrong in the logs, so the logs had better say something.
+  if (process.env.PORT !== undefined && process.env.PORT.trim() === '') {
+    console.warn(
+      `[cvefeed] PORT is set but empty, so falling back to ${config.port}. If your host assigns ` +
+        'a port, remove the PORT variable entirely rather than leaving it blank, or this app ' +
+        'will not be reachable.',
+    );
+  }
+
   const server = app.listen(config.port, () => {
     console.log(`[cvefeed] listening on http://localhost:${config.port}`);
     console.log(`[cvefeed] sources: ${config.sources.join(', ')}`);

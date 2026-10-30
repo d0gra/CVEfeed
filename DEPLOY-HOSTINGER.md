@@ -25,7 +25,7 @@ In hPanel go to **Advanced → Node.js** and click **Create application**:
 
 | Field | Value |
 | --- | --- |
-| Node.js version | **22.x** (or any 18.17+) |
+| Node.js version | the **highest offered** — 24.x if available, else 22.x (see the note below) |
 | Application mode | **Production** |
 | Application root | the folder you deployed into, e.g. `cvefeed` |
 | Application URL | your domain or subdomain |
@@ -44,6 +44,41 @@ against `package.json`). Wait for it to finish.
 Click **Start** (or **Restart**). Open your domain — the dashboard loads
 immediately and fills in as the feeds arrive, which takes 20–30 seconds on the
 very first boot.
+
+### Importing from GitHub instead
+
+Hostinger's GitHub import reads `.env.example` and presents **every key it
+finds** as a form, which looks like eighteen required settings. It is not.
+Every one of them has a working default: a clean clone with nothing set but
+the port serves the full feed from all five sources.
+
+**Delete the `PORT` row.** It is the one entry that can break the deployment.
+Hostinger assigns the port through `PORT`, and submitting that key with an
+empty value shadows the assignment, so the app listens on 3000 while the proxy
+looks elsewhere. The symptom is a 502 with a perfectly healthy application log.
+The app warns about this at startup, but removing the row is better than
+reading about it afterwards.
+
+Of the rest, three are worth filling in and the other fourteen can be deleted
+or left blank:
+
+| Key | Value | Why |
+| --- | --- | --- |
+| `SITE_URL` | `https://yourdomain.com` | Canonical URLs, sitemap entries and Open Graph tags need an absolute origin. Behind a TLS-terminating proxy the request's own scheme is `http`, so this cannot be inferred. |
+| `GITHUB_TOKEN` | a read-only PAT | Raises the advisories limit to 5000/hour, and is what makes the public-PoC signal dependable: unauthenticated GitHub allows 60 requests an hour **per IP**, shared with every other site on a shared host. |
+| `NVD_API_KEY` | a [free key](https://nvd.nist.gov/developers/request-an-api-key) | Raises NVD from 5 to 50 requests / 30s, which matters on a shared IP. |
+
+Set **Build command** to nothing — there is no build step — and the **start
+command** to `npm start`. Install with `npm ci --omit=dev`, which keeps the
+MCP SDK (a test-only dependency) out of the deployment.
+
+### A note on the Node version
+
+Node 18 reached end of life on 30 April 2025 and Node 20 on 30 April 2026;
+neither receives security patches. Node 24 is the current Active LTS. The code
+targets 18.17+ and uses nothing newer, so 18 should work — but running an
+unpatched runtime under a vulnerability dashboard is not a good look, so pick
+the highest version the panel offers.
 
 ### 5. Optional: environment variables
 
