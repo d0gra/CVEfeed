@@ -2,6 +2,7 @@ import config from './config.js';
 import { cached, peek } from './lib/cache.js';
 import { finalize, mergeAll } from './merge.js';
 import { enabledSources } from './sources/index.js';
+import { attachSignals } from './exploits.js';
 
 const FEED_KEY = 'feed-merged';
 
@@ -71,20 +72,32 @@ async function collect() {
   }
 
   const items = [...merged.values()].map(finalize).filter(keepRecord);
+
+  // Exploit signals are attached here rather than in finalize() because they
+  // come from their own slow-moving index, which the feed must never wait on
+  // indefinitely. A failure leaves records unsignalled, not wrong.
+  const exploitHealth = await attachSignals(items);
+
   items.sort(comparators.priority);
 
   return {
     items,
     sources: results.map((r) => r.health),
+    exploitSources: exploitHealth,
     generatedAt: new Date().toISOString(),
     window: { nvdDays: config.nvdDays },
   };
 }
 
+/** Observed beats weaponized beats a public exploit beats a PoC. */
+const maturityOf = (item) => (item.exploitation ? item.exploitation.maturityRank : 99);
+
 export const comparators = {
-  // Operational triage order: exploited first, then impact, then recency.
+  // Operational triage order. How reachable an exploit is now outranks the
+  // score: a 7.5 with a Metasploit module is a worse afternoon than a 9.8
+  // nobody has written anything for.
   priority: (a, b) =>
-    Number(b.exploited) - Number(a.exploited) ||
+    maturityOf(a) - maturityOf(b) ||
     (b.score ?? -1) - (a.score ?? -1) ||
     String(b.published ?? '').localeCompare(String(a.published ?? '')),
   newest: (a, b) => String(b.published ?? '').localeCompare(String(a.published ?? '')),
@@ -92,6 +105,7 @@ export const comparators = {
   score: (a, b) => (b.score ?? -1) - (a.score ?? -1),
   epss: (a, b) => (b.epss ?? -1) - (a.epss ?? -1),
   severity: (a, b) => b.severityRank - a.severityRank || (b.score ?? -1) - (a.score ?? -1),
+  exploitability: (a, b) => maturityOf(a) - maturityOf(b) || (b.epss ?? -1) - (a.epss ?? -1),
 };
 
 export function getFeed({ force = false } = {}) {

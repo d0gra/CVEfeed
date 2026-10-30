@@ -42,6 +42,12 @@ function compact(item, detail = false) {
   };
 
   if (item.epss != null) out.epssPercent = item.epss;
+  if (item.exploitation) {
+    out.exploitation = {
+      maturity: item.exploitation.maturity,
+      ...(detail ? { evidence: item.exploitation.evidence } : {}),
+    };
+  }
   if (item.stack) out.aiStack = { categories: item.stack.categories, projects: item.stack.subjects };
   if (item.vendor || item.product) out.affected = [item.vendor, item.product].filter(Boolean).join(' / ');
   if (item.outsideWindow) out.outsideFeedWindow = true;
@@ -95,9 +101,11 @@ const TOOLS = [
     name: 'search_cves',
     description:
       'Search current vulnerability disclosures merged from NVD, CISA KEV, GitHub Advisories, ' +
-      'EUVD and CISA advisories. Filter by severity, CVSS, exploitation status, AI/agent-stack ' +
-      'category, recency or free text. Results are ordered by what warrants attention first ' +
-      '(actively exploited, then CVSS, then recency) unless you choose another sort.',
+      'EUVD and CISA advisories, enriched with exploit-availability signals from Exploit-DB, ' +
+      'Metasploit, Nuclei and published proof-of-concept code. Filter by severity, CVSS, ' +
+      'exploitation status, how reachable an exploit is, AI/agent-stack category, recency or ' +
+      'free text. Results lead with what warrants attention first - how available an exploit is, ' +
+      'then CVSS, then recency - unless you choose another sort.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -105,9 +113,21 @@ const TOOLS = [
         severity: { type: 'array', items: { type: 'string', enum: SEVERITY_ORDER }, description: 'Restrict to these severities.' },
         stack: { type: 'array', items: { type: 'string', enum: ['any', ...stackEnum] }, description: 'Restrict to the AI/agent stack. "any" means anything classified; otherwise pick categories.' },
         exploited: { type: 'boolean', description: 'Only vulnerabilities on CISA KEV, i.e. known to be exploited in the wild.' },
+        exploit: {
+          type: 'array',
+          items: { type: 'string', enum: ['any', 'observed', 'metasploit', 'exploitdb', 'poc', 'nuclei'] },
+          description:
+            'Only records carrying these exploit-availability signals. "observed" is exploitation seen in the wild, "metasploit" a ready-made module, "exploitdb" an archived exploit, "poc" published proof-of-concept code, "nuclei" a detection template (so it is scanned for at scale). "any" means any signal at all.',
+        },
+        maturity: {
+          type: 'string',
+          enum: ['observed', 'weaponized', 'public-exploit', 'proof-of-concept'],
+          description:
+            'Minimum rung of the exploit-maturity ladder, highest first: observed in the wild, weaponized (Metasploit), a public exploit, then a proof of concept. Asking for "public-exploit" also returns everything above it.',
+        },
         minCvss: { type: 'number', minimum: 0, maximum: 10 },
         days: { type: 'integer', minimum: 1, maximum: 120, description: 'Only records published within this many days.' },
-        sort: { type: 'string', enum: ['priority', 'newest', 'updated', 'score', 'epss', 'severity'] },
+        sort: { type: 'string', enum: ['priority', 'newest', 'updated', 'score', 'epss', 'severity', 'exploitability'] },
         limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
         detail: { type: 'boolean', description: 'Include descriptions, CVSS vectors, CWEs, KEV guidance and reference URLs. Costs considerably more tokens.' },
       },
@@ -128,8 +148,10 @@ const TOOLS = [
   {
     name: 'list_exploited',
     description:
-      'Vulnerabilities on CISA KEV, which are confirmed exploited in the wild and therefore the ' +
-      'ones to patch first. Optionally narrow to the AI/agent stack.',
+      'Vulnerabilities on CISA KEV, confirmed exploited in the wild and therefore the ones to ' +
+      'patch first. Optionally narrow to the AI/agent stack. For the wider question of what ' +
+      'someone could exploit today, including vulnerabilities with public exploit code that CISA ' +
+      'has not catalogued, use search_cves with the exploit or maturity filters.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -159,6 +181,8 @@ function toQuery(args = {}, overrides = {}) {
     severity: asArray(args.severity).join(','),
     stack: asArray(args.stack).join(','),
     minScore: args.minCvss,
+    exploit: asArray(args.exploit).join(','),
+    maturity: args.maturity,
     days: args.days,
     sort: args.sort,
     limit: Math.min(Math.max(Number(args.limit) || 20, 1), 100),
@@ -225,6 +249,17 @@ async function callTool(name, args = {}) {
         inAiStack: result.stats.inStack,
         exploitedInAiStack: result.stats.stackExploited,
         sources: result.sources.map((s) => ({ id: s.id, name: s.name, ok: s.ok, records: s.count, error: s.error ?? undefined })),
+        // A signal whose source is down is absent, not negative, so an agent
+        // needs to know which ones answered before reading nothing as safe.
+        exploitSignals: (result.exploitSources ?? []).map((s) => ({
+          id: s.id,
+          name: s.name,
+          means: s.about,
+          ok: s.ok,
+          records: s.count,
+          error: s.error ?? undefined,
+        })),
+        withExploitSignal: result.stats.withExploitSignal,
         aiStackCategories: STACK_CATEGORIES.map(({ id, name, blurb }) => ({ id, name, covers: blurb })),
         feedWindowDays: config.nvdDays,
       });

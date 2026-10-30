@@ -10,6 +10,7 @@ import { comparators, getFeed } from './aggregate.js';
 import { SEVERITY_ORDER } from './lib/severity.js';
 import { isCveId, lookupCve } from './lookup.js';
 import { STACK_CATEGORY_IDS } from './stack.js';
+import { attachSignals, MATURITY } from './exploits.js';
 
 const asList = (value) =>
   String(value ?? '')
@@ -27,6 +28,11 @@ function applyFilters(items, query) {
   const sources = asList(query.source);
   const kinds = asList(query.kind);
   const stackRaw = asList(query.stack);
+  // Either a named signal (metasploit, poc, ...) or a minimum rung of the
+  // maturity ladder, which is what someone triaging usually means.
+  const exploitSignals = asList(query.exploit);
+  const minMaturity = String(query.maturity ?? '').trim().toLowerCase();
+  const minMaturityRank = MATURITY.indexOf(minMaturity);
   const anyStack = stackRaw.includes('any') || stackRaw.includes('all');
   const stacks = stackRaw.filter((s) => STACK_CATEGORY_IDS.includes(s));
   const needle = String(query.q ?? '').trim().toLowerCase();
@@ -43,6 +49,25 @@ function applyFilters(items, query) {
     if (anyStack && !item.stack) return false;
     if (stacks.length && !item.stack?.categories.some((c) => stacks.includes(c))) return false;
     if (exploitedOnly && !item.exploited) return false;
+
+    if (exploitSignals.length) {
+      const x = item.exploitation;
+      const matches = exploitSignals.some((signal) => {
+        if (signal === 'any') return Boolean(x);
+        if (signal === 'weaponized' || signal === 'metasploit') return x?.weaponized === true;
+        if (signal === 'exploit' || signal === 'exploitdb') return x?.publicExploit === true;
+        if (signal === 'poc') return x?.publicPoc === true;
+        if (signal === 'scannable' || signal === 'nuclei') return x?.scannable === true;
+        if (signal === 'observed') return x?.observed === true;
+        return false;
+      });
+      if (!matches) return false;
+    }
+
+    if (minMaturityRank >= 0) {
+      const rank = item.exploitation?.maturityRank ?? 99;
+      if (rank > minMaturityRank) return false;
+    }
     if (Number.isFinite(minScore) && (item.score ?? -1) < minScore) return false;
 
     if (since) {
@@ -65,6 +90,7 @@ function applyFilters(items, query) {
         item.tags.join(' '),
         item.stack?.subjects.join(' '),
         item.stack?.categoryNames.join(' '),
+        item.exploitation?.evidence.join(' '),
       ]
         .filter(Boolean)
         .join(' ')
@@ -80,6 +106,8 @@ function summarize(items) {
   const bySeverity = Object.fromEntries(SEVERITY_ORDER.map((s) => [s, 0]));
   const bySource = {};
   const byStack = Object.fromEntries(STACK_CATEGORY_IDS.map((id) => [id, 0]));
+  const byExploit = { observed: 0, weaponized: 0, publicExploit: 0, publicPoc: 0, scannable: 0 };
+  let withExploitSignal = 0;
   let inStack = 0;
   let stackExploited = 0;
   let exploited = 0;
@@ -95,6 +123,10 @@ function summarize(items) {
       inStack += 1;
       if (item.exploited) stackExploited += 1;
       for (const c of item.stack.categories) byStack[c] = (byStack[c] ?? 0) + 1;
+    }
+    if (item.exploitation) {
+      withExploitSignal += 1;
+      for (const key of Object.keys(byExploit)) if (item.exploitation[key]) byExploit[key] += 1;
     }
     if (item.exploited) exploited += 1;
     if (Number.isFinite(item.score)) {
@@ -112,6 +144,8 @@ function summarize(items) {
     byStack,
     inStack,
     stackExploited,
+    byExploit,
+    withExploitSignal,
     exploited,
     last24h: fresh,
     averageScore: scored ? Number((scoreTotal / scored).toFixed(1)) : null,
@@ -157,6 +191,8 @@ export async function queryFeed(query = {}) {
       const found = await lookupCve(term);
       if (found.value.item) {
         lookup = { sources: found.value.sources, lookedUpAt: found.value.lookedUpAt };
+        // A looked-up record skipped the feed's enrichment, so it gets it here.
+        await attachSignals([found.value.item]);
         sorted.push(found.value.item);
       }
     } catch (error) {
@@ -177,6 +213,7 @@ export async function queryFeed(query = {}) {
     },
     stats: summarize(sorted),
     sources: feed.value.sources,
+    exploitSources: feed.value.exploitSources ?? [],
     items: sorted.slice(start, start + limit),
   };
 }
@@ -199,6 +236,7 @@ export async function findRecord(id) {
   if (isCveId(id)) {
     const found = await lookupCve(id);
     if (found.value.item) {
+      await attachSignals([found.value.item]);
       return {
         item: found.value.item,
         meta: { ...feedMeta(feed), lookup: { sources: found.value.sources, lookedUpAt: found.value.lookedUpAt } },

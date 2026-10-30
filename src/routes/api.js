@@ -4,6 +4,7 @@ import { getFeed } from '../aggregate.js';
 import { feedMeta, findRecord, queryFeed, summarize } from '../query.js';
 import { enabledSources } from '../sources/index.js';
 import { stackFacets } from '../stack.js';
+import { EXPLOIT_SOURCE_META, getExploitIndex } from '../exploits.js';
 
 const router = Router();
 
@@ -31,6 +32,21 @@ router.get('/stats', async (_req, res, next) => {
 /** The AI-stack facet definitions, so the dashboard renders from one source. */
 router.get('/stack', (_req, res) => {
   res.json({ categories: stackFacets() });
+});
+
+/** What each exploit signal means, and whether its source is answering. */
+router.get('/exploit-sources', async (_req, res, next) => {
+  try {
+    const index = await getExploitIndex();
+    res.json({
+      signals: Object.values(EXPLOIT_SOURCE_META),
+      health: index.value.health ?? [],
+      builtAt: index.value.builtAt,
+      ageSeconds: Math.round((index.ageMs ?? 0) / 1000),
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.get('/sources', (_req, res) => {

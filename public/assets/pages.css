@@ -99,6 +99,8 @@
   margin: 26px 0;
 }
 .callout h2 { color: var(--critical); margin-bottom: 9px; }
+.callout-exploit { border-left-color: var(--high); }
+.callout-exploit h2 { color: var(--high); }
 .callout .terms { font-size: 13px; color: var(--ink-soft); }
 .callout p:last-child { margin-bottom: 0; }
 

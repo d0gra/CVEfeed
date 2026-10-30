@@ -11,7 +11,9 @@
     "start": "node app.js",
     "dev": "node --watch app.js",
     "warm": "node scripts/warm-cache.js",
-    "test:mcp": "node test/mcp-conformance.mjs"
+    "test:mcp": "node test/mcp-conformance.mjs",
+    "test:exploits": "node test/exploit-resilience.mjs",
+    "test": "node test/exploit-resilience.mjs && node test/mcp-conformance.mjs"
   },
   "keywords": [
     "cve",

@@ -329,6 +329,37 @@ button.figure[aria-pressed="true"] .figure-label::after {
 .stack-exploited:hover { border-bottom-color: currentColor; }
 .stack-exploited:focus-visible { outline: 2px solid var(--critical); outline-offset: 2px; }
 
+.exploitline {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 13px;
+  font-size: 12.5px;
+}
+.exploit-label {
+  flex: none;
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--high);
+}
+.exploitline .chip[aria-pressed="true"] {
+  color: var(--high);
+  border-bottom-color: var(--high);
+}
+.exploit-note { font-size: 11.5px; color: var(--medium); }
+
+.flag-exploit { color: var(--high); }
+
+.exploit-evidence { display: flex; flex-wrap: wrap; gap: 0 14px; margin: 0; }
+.exploit-evidence span {
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--high);
+}
+
 .crosslinks {
   display: flex;
   flex-wrap: wrap;
@@ -753,7 +784,7 @@ select:hover { color: var(--ink); border-bottom-color: var(--accent); }
   .entry-head { grid-template-columns: 44px 1fr; gap: 14px; }
   .entry-sources { display: none; }
   .detail { padding-left: 58px; }
-  .filterline, .stackline { gap: 12px; }
+  .filterline, .stackline, .exploitline { gap: 12px; }
   .rule, .spacer { display: none; }
   .controls-right { width: 100%; justify-content: space-between; }
 }

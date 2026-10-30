@@ -45,6 +45,9 @@ const dom = {
   stackChips: el('stack-chips'),
   stackOnly: el('stack-only'),
   stackCounts: el('stack-counts'),
+  exploitline: el('exploitline'),
+  exploitChips: el('exploit-chips'),
+  exploitNote: el('exploit-note'),
   refresh: el('refresh'),
   reset: el('reset'),
   theme: el('theme-toggle'),
@@ -61,6 +64,7 @@ const state = {
   source: new Set(),
   stack: new Set(),
   stackOnly: false,
+  exploit: new Set(),
   page: 1,
   limit: 50,
 };
@@ -120,6 +124,7 @@ function readUrl() {
   const stack = (p.get('stack') ?? '').split(',').filter(Boolean);
   state.stackOnly = stack.includes('any');
   state.stack = new Set(stack.filter((v) => v !== 'any'));
+  state.exploit = new Set((p.get('exploit') ?? '').split(',').filter(Boolean));
 }
 
 /** Categories are more specific than the master toggle, so they win. */
@@ -138,6 +143,7 @@ function writeUrl() {
   if (state.source.size) p.set('source', [...state.source].join(','));
   const stack = stackParam();
   if (stack) p.set('stack', stack);
+  if (state.exploit.size) p.set('exploit', [...state.exploit].join(','));
   if (state.page > 1) p.set('page', String(state.page));
   const qs = p.toString();
   history.replaceState(null, '', qs ? `?${qs}` : location.pathname);
@@ -209,6 +215,36 @@ function renderChips(stats) {
     .join('');
 
   renderStackChips(stats);
+  renderExploitChips(stats);
+}
+
+// Ordered by how directly each answers "could someone exploit this today".
+const EXPLOIT_SIGNALS = [
+  { id: 'observed', label: 'In the wild', key: 'observed', title: 'Exploitation observed, per CISA KEV' },
+  { id: 'metasploit', label: 'Metasploit', key: 'weaponized', title: 'A Metasploit module exists, so exploitation is point-and-click' },
+  { id: 'exploitdb', label: 'Exploit-DB', key: 'publicExploit', title: 'An exploit is archived and downloadable' },
+  { id: 'poc', label: 'Public PoC', key: 'publicPoc', title: 'Proof-of-concept code is published on GitHub' },
+  { id: 'nuclei', label: 'Scanned for', key: 'scannable', title: 'A Nuclei detection template exists, so it is scanned for at scale' },
+];
+
+function renderExploitChips(stats) {
+  const counts = stats?.byExploit;
+  if (!counts) return;
+  dom.exploitline.hidden = false;
+
+  dom.exploitChips.innerHTML = EXPLOIT_SIGNALS.map((sig) => {
+    const count = counts[sig.key] ?? 0;
+    return `<button type="button" class="chip" data-exploit="${sig.id}" data-empty="${count === 0}"
+      title="${escapeHtml(sig.title)}"
+      aria-pressed="${state.exploit.has(sig.id)}">${escapeHtml(sig.label)}<b>${count}</b></button>`;
+  }).join('');
+
+  // A signal whose source did not answer is missing, not negative, and saying
+  // so is the difference between "nothing found" and "we did not look".
+  const down = (lastPayload?.exploitSources ?? []).filter((h) => !h.ok && h.id !== 'vulncheck');
+  dom.exploitNote.textContent = down.length
+    ? `${down.map((h) => h.name).join(', ')} unavailable — those signals are missing, not absent`
+    : '';
 }
 
 function renderStackChips(stats) {
@@ -291,6 +327,15 @@ function copyButton(label, value, extraClass = '', title = 'Copy') {
 function badges(item) {
   const out = [];
   if (item.exploited) out.push('<span class="flag">Exploited</span>');
+  // Only worth a badge when it says something "Exploited" does not.
+  if (!item.exploited && item.exploitation && item.exploitation.maturity !== 'none') {
+    const label = item.exploitation.weaponized
+      ? 'Metasploit'
+      : item.exploitation.publicExploit
+        ? 'Exploit published'
+        : 'PoC published';
+    out.push(`<span class="flag flag-exploit" title="${escapeHtml(item.exploitation.evidence.join(', '))}">${label}</span>`);
+  }
   if (item.kev?.ransomware) out.push('<span class="flag flag-ransom">Ransomware</span>');
   if (item.kind === 'advisory') out.push('<span class="flag flag-quiet">Advisory</span>');
   if (Number.isFinite(item.epss) && item.epss >= 1) {
@@ -333,6 +378,18 @@ function detailHtml(item, id = item.cveId ?? item.id) {
       ${terms.length ? `<p class="terms">${terms.map(escapeHtml).join(' · ')}</p>` : ''}
       ${item.kev.requiredAction ? `<p>${escapeHtml(item.kev.requiredAction)}</p>` : ''}
     </div>`);
+  }
+
+  if (item.exploitation) {
+    blocks.push(`<div class="block"><h4>Exploit availability</h4>
+      <p class="exploit-evidence">${item.exploitation.evidence
+        .map((e) => `<span>${escapeHtml(e)}</span>`)
+        .join('')}</p>
+      ${
+        item.exploitation.scannable
+          ? '<p class="terms">A detection template exists, so this is scanned for across the internet at scale.</p>'
+          : ''
+      }</div>`);
   }
 
   const facts = [
@@ -520,6 +577,7 @@ function buildQuery() {
   if (state.source.size) p.set('source', [...state.source].join(','));
   const stack = stackParam();
   if (stack) p.set('stack', stack);
+  if (state.exploit.size) p.set('exploit', [...state.exploit].join(','));
   p.set('page', String(state.page));
   p.set('limit', String(state.limit));
   return p.toString();
@@ -626,6 +684,13 @@ dom.stackChips.addEventListener('click', (event) => {
   // Picking a category is a narrower statement than "only the AI stack".
   state.stackOnly = false;
   toggleSet(state.stack, chip.dataset.stack);
+  apply();
+});
+
+dom.exploitChips.addEventListener('click', (event) => {
+  const chip = event.target.closest('[data-exploit]');
+  if (!chip) return;
+  toggleSet(state.exploit, chip.dataset.exploit);
   apply();
 });
 
@@ -755,6 +820,7 @@ dom.reset.addEventListener('click', () => {
   state.source.clear();
   state.stack.clear();
   state.stackOnly = false;
+  state.exploit.clear();
   syncControls();
   apply();
 });

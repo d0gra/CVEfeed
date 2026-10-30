@@ -65,6 +65,44 @@ remediation deadline come back for any CVE at no extra request.
 Full-text search across every CVE ever published is deliberately *not*
 supported: that needs an index, which means the database this app avoids.
 
+## Exploit availability
+
+CISA KEV answers "is this being exploited?" and EPSS answers "is it likely to
+be?". Between them sits the question that usually decides what gets patched
+this afternoon: **can someone run an exploit today?**
+
+| Signal | Source | Means |
+| --- | --- | --- |
+| In the wild | CISA KEV, VulnCheck KEV | Exploitation has been observed |
+| Metasploit | Metasploit Framework | A module exists, so it is point-and-click |
+| Exploit-DB | Exploit-DB | An exploit is archived and downloadable |
+| Public PoC | PoC-in-GitHub | Proof-of-concept code is published |
+| Scanned for | Nuclei templates | A detection template exists, so the internet is scanned for it at scale |
+
+Filter with `exploit=poc,metasploit,...`, or `maturity=` for a minimum rung of
+the ladder (`observed`, `weaponized`, `public-exploit`, `proof-of-concept`),
+which also returns everything above it. `sort=exploitability` leads with
+whatever is most reachable.
+
+In a typical week this roughly doubles the records carrying actionable exploit
+intelligence — not from Exploit-DB, which archives older vulnerabilities and
+barely intersects a rolling window, but from public PoCs, which appear within
+days of disclosure.
+
+**Absence is not a negative.** A source that is unreachable removes its signal
+and nothing else, and the dashboard says so rather than letting "nothing found"
+read as "nothing exists". `npm run test:exploits` covers that contract: total
+network failure, a single source 500ing, a changed file format, a hung
+download, and the claim that a missing source never becomes a `false`.
+
+The downloads total roughly 27MB, so they cache far longer than the feed
+(`EXPLOIT_TTL_HOURS`, default 12) and run under a budget
+(`EXPLOIT_BUDGET_SECONDS`, default 25) after which the feed is served without
+them; they attach on the next refresh. Set `GITHUB_TOKEN` in production —
+unauthenticated GitHub allows 60 requests an hour per IP, shared with every
+other site on a shared host. `VULNCHECK_TOKEN` is optional and free, and adds a
+considerably wider view of observed exploitation than CISA's.
+
 ## The AI stack
 
 Vulnerabilities in the software agents are built on get their own facet:
@@ -188,6 +226,7 @@ All endpoints return JSON.
 | `GET /api/stats` | Summary counts only |
 | `GET /api/sources` | Configured sources and their metadata |
 | `GET /api/stack` | The AI-stack categories the feed classifies against |
+| `GET /api/exploit-sources` | What each exploit signal means, and whether its source is answering |
 | `GET /api/cve/:id` | One record by CVE, GHSA, EUVD or advisory ID, falling back to a direct source lookup |
 | `POST /api/refresh` | Force a refetch (requires `REFRESH_TOKEN`) |
 | `GET /healthz` | Liveness, cache age, and the TTL/grace thresholds that give that age its meaning |
@@ -195,9 +234,12 @@ All endpoints return JSON.
 | `GET /llms.txt` | Prose description of the service for agents |
 
 `GET /api/feed` accepts `q`, `severity` (`critical,high,medium,low,none`),
-`source`, `kind` (`cve` / `advisory`), `stack`, `exploited=1`, `minScore`,
-`days`, `sort` (`priority`, `newest`, `updated`, `score`, `epss`, `severity`),
-`page` and `limit` (max 500).
+`source`, `kind` (`cve` / `advisory`), `stack`, `exploit`, `maturity`,
+`exploited=1`, `minScore`, `days`, `sort` (`priority`, `newest`, `updated`,
+`score`, `epss`, `severity`, `exploitability`), `page` and `limit` (max 500).
+
+An unrecognised `exploit` value returns nothing rather than everything: in a
+security tool a typo should look wrong, not look like no filter.
 
 `stack` takes `any` for everything classified, or a comma-separated list of
 `inference`, `agents`, `mcp`, `retrieval`, `mlops`, `runtime`, `apps`. Each
@@ -210,6 +252,9 @@ curl 'localhost:3000/api/feed?exploited=1&severity=critical&days=7&limit=5'
 
 # Anything in the AI stack that is already being exploited
 curl 'localhost:3000/api/feed?stack=any&exploited=1'
+
+# Not yet catalogued by CISA, but exploit code is public
+curl 'localhost:3000/api/feed?maturity=proof-of-concept&exploited=0'
 
 # MCP servers and agent frameworks only
 curl 'localhost:3000/api/feed?stack=mcp,agents'

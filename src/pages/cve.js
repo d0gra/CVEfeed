@@ -31,6 +31,9 @@ export function cveSummary(item, id) {
   const bits = [];
   bits.push(item.score != null ? `CVSS ${item.score} ${severityWord(item).toLowerCase()}` : 'Unscored');
   if (item.exploited) bits.push('known exploited');
+  else if (item.exploitation?.weaponized) bits.push('Metasploit module available');
+  else if (item.exploitation?.publicExploit) bits.push('public exploit available');
+  else if (item.exploitation?.publicPoc) bits.push('public PoC available');
   if (item.stack?.subjects?.length) bits.push(`affects ${item.stack.subjects.join(', ')}`);
   const head = `${id}: ${bits.join(', ')}.`;
   return truncate(`${head} ${item.description || item.title || ''}`, 158);
@@ -42,6 +45,7 @@ function factsTable(item) {
     ['Severity', severityWord(item)],
     ['EPSS', Number.isFinite(item.epss) ? `${item.epss}% chance of exploitation in the next 30 days` : null],
     ['Known exploited', item.exploited ? 'Yes — listed in the CISA KEV catalog' : 'Not listed in CISA KEV'],
+    ['Exploit availability', item.exploitation ? item.exploitation.evidence.join(', ') : 'Nothing found in Exploit-DB, Metasploit, Nuclei or public PoC repositories'],
     ['Published', fullDate(item.published)],
     ['Last updated', fullDate(item.modified)],
     ['Affected', [item.vendor, item.product].filter(Boolean).join(' · ') || null],
@@ -62,10 +66,42 @@ function kevBlock(item) {
     item.kev.ransomware ? 'Known use in ransomware campaigns' : null,
   ].filter(Boolean);
 
+  const evidence = item.exploitation?.evidence?.filter((e) => e !== 'CISA KEV') ?? [];
+
   return `<section class="callout">
     <h2>Being exploited in the wild</h2>
     ${terms.length ? `<p class="terms">${terms.map(escapeHtml).join(' · ')}</p>` : ''}
     ${item.kev.requiredAction ? `<p>${escapeHtml(item.kev.requiredAction)}</p>` : ''}
+    ${
+      evidence.length
+        ? `<p class="terms">Exploit code is also public: ${evidence.map(escapeHtml).join(' · ')}</p>`
+        : ''
+    }
+  </section>`;
+}
+
+function exploitBlock(item) {
+  const x = item.exploitation;
+  if (!x) return '';
+
+  const headline = {
+    observed: 'Exploited in the wild',
+    weaponized: 'A ready-made exploit module exists',
+    'public-exploit': 'A public exploit is available',
+    'proof-of-concept': 'Proof-of-concept code is published',
+    none: 'Scanned for across the internet',
+  }[x.maturity];
+
+  return `<section class="callout callout-exploit">
+    <h2>${escapeHtml(headline)}</h2>
+    <p class="terms">${x.evidence.map((e) => escapeHtml(e)).join(' · ')}</p>
+    ${
+      x.scannable
+        ? '<p>A Nuclei detection template exists for this, which means it is scanned for at internet scale rather than looked for deliberately.</p>'
+        : ''
+    }
+    <p class="aside">Signals come from Exploit-DB, Metasploit, Nuclei and published proof-of-concept
+    repositories. Their absence means nothing was found, not that nothing exists.</p>
   </section>`;
 }
 
@@ -110,6 +146,7 @@ export function cvePage({ item, id, origin, canonical, lookedUp, assetVersion })
     ${item.description ? `<p class="lede">${escapeHtml(item.description)}</p>` : ''}
 
     ${kevBlock(item)}
+    ${item.exploited ? '' : exploitBlock(item)}
     ${stackBlock(item)}
 
     <section class="block">

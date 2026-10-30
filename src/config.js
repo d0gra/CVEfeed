@@ -33,6 +33,17 @@ export const config = {
   // shows current activity rather than the full historical catalog. 0 keeps all.
   kevDays: clamp(int(process.env.KEV_DAYS, 90), 0, 36500),
   githubToken: process.env.GITHUB_TOKEN || '',
+  // Exploit-availability signals. These are large, slow-moving downloads, so
+  // they get their own long TTL rather than riding the feed's.
+  exploitSources: (process.env.EXPLOIT_SOURCES || 'exploitdb,metasploit,nuclei,poc,vulncheck')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean),
+  exploitTtlMs: clamp(int(process.env.EXPLOIT_TTL_HOURS, 12), 1, 720) * 3_600_000,
+  // How long the first build may wait for them before serving without. The
+  // feed is more useful on time than complete.
+  exploitBudgetMs: clamp(int(process.env.EXPLOIT_BUDGET_SECONDS, 25), 1, 300) * 1000,
+  vulncheckToken: process.env.VULNCHECK_TOKEN || '',
   diskCache: bool(process.env.DISK_CACHE, true),
   diskCacheDir: path.resolve(process.cwd(), process.env.DISK_CACHE_DIR || '.cache'),
   // Canonical origin for links search engines and agents must agree on. Falls
