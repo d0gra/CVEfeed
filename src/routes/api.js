@@ -1,178 +1,15 @@
 import { Router } from 'express';
 import config from '../config.js';
-import { comparators, getFeed } from '../aggregate.js';
-import { SEVERITY_ORDER } from '../lib/severity.js';
-import { isCveId, lookupCve } from '../lookup.js';
+import { getFeed } from '../aggregate.js';
+import { feedMeta, findRecord, queryFeed, summarize } from '../query.js';
 import { enabledSources } from '../sources/index.js';
-import { STACK_CATEGORY_IDS, stackFacets } from '../stack.js';
+import { stackFacets } from '../stack.js';
 
 const router = Router();
 
-const asList = (value) =>
-  String(value ?? '')
-    .split(',')
-    .map((v) => v.trim().toLowerCase())
-    .filter(Boolean);
-
-const int = (value, fallback) => {
-  const n = Number.parseInt(value ?? '', 10);
-  return Number.isFinite(n) ? n : fallback;
-};
-
-function applyFilters(items, query) {
-  const severities = asList(query.severity).filter((s) => SEVERITY_ORDER.includes(s));
-  const sources = asList(query.source);
-  const kinds = asList(query.kind);
-  const stackRaw = asList(query.stack);
-  const anyStack = stackRaw.includes('any') || stackRaw.includes('all');
-  const stacks = stackRaw.filter((s) => STACK_CATEGORY_IDS.includes(s));
-  const needle = String(query.q ?? '').trim().toLowerCase();
-  const minScore = Number.parseFloat(query.minScore);
-  const days = int(query.days, 0);
-  const exploitedOnly = ['1', 'true', 'yes'].includes(String(query.exploited ?? '').toLowerCase());
-
-  const since = days > 0 ? Date.now() - days * 86_400_000 : null;
-
-  return items.filter((item) => {
-    if (severities.length && !severities.includes(item.severity)) return false;
-    if (sources.length && !item.sourceIds.some((id) => sources.includes(id))) return false;
-    if (kinds.length && !kinds.includes(item.kind)) return false;
-    if (anyStack && !item.stack) return false;
-    if (stacks.length && !item.stack?.categories.some((c) => stacks.includes(c))) return false;
-    if (exploitedOnly && !item.exploited) return false;
-    if (Number.isFinite(minScore) && (item.score ?? -1) < minScore) return false;
-
-    if (since) {
-      const stamp = Date.parse(item.published ?? item.modified ?? '');
-      if (!Number.isFinite(stamp) || stamp < since) return false;
-    }
-
-    if (needle) {
-      const haystack = [
-        item.id,
-        item.cveId,
-        item.ghsaId,
-        item.euvdId,
-        item.advisoryId,
-        item.title,
-        item.description,
-        item.vendor,
-        item.product,
-        item.cwes.join(' '),
-        item.tags.join(' '),
-        item.stack?.subjects.join(' '),
-        item.stack?.categoryNames.join(' '),
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-      if (!haystack.includes(needle)) return false;
-    }
-
-    return true;
-  });
-}
-
-function summarize(items) {
-  const bySeverity = Object.fromEntries(SEVERITY_ORDER.map((s) => [s, 0]));
-  const bySource = {};
-  const byStack = Object.fromEntries(STACK_CATEGORY_IDS.map((id) => [id, 0]));
-  let inStack = 0;
-  let stackExploited = 0;
-  let exploited = 0;
-  let scored = 0;
-  let scoreTotal = 0;
-  const last24h = Date.now() - 86_400_000;
-  let fresh = 0;
-
-  for (const item of items) {
-    bySeverity[item.severity] = (bySeverity[item.severity] ?? 0) + 1;
-    for (const id of item.sourceIds) bySource[id] = (bySource[id] ?? 0) + 1;
-    if (item.stack) {
-      inStack += 1;
-      if (item.exploited) stackExploited += 1;
-      for (const c of item.stack.categories) byStack[c] = (byStack[c] ?? 0) + 1;
-    }
-    if (item.exploited) exploited += 1;
-    if (Number.isFinite(item.score)) {
-      scored += 1;
-      scoreTotal += item.score;
-    }
-    const stamp = Date.parse(item.published ?? '');
-    if (Number.isFinite(stamp) && stamp >= last24h) fresh += 1;
-  }
-
-  return {
-    total: items.length,
-    bySeverity,
-    bySource,
-    byStack,
-    inStack,
-    stackExploited,
-    exploited,
-    last24h: fresh,
-    averageScore: scored ? Number((scoreTotal / scored).toFixed(1)) : null,
-  };
-}
-
-const feedMeta = (feed) => ({
-  generatedAt: feed.value.generatedAt,
-  fromCache: feed.fromCache,
-  stale: feed.stale,
-  // stale + revalidating means the snapshot is old but a refresh is already
-  // running; stale on its own means the refresh failed.
-  revalidating: feed.revalidating ?? false,
-  ageSeconds: Math.round((feed.ageMs ?? 0) / 1000),
-  cacheTtlSeconds: Math.round(config.cacheTtlMs / 1000),
-  staleWhileRevalidateSeconds: Math.round(config.staleWhileRevalidateMs / 1000),
-  ...(feed.error ? { warning: feed.error } : {}),
-});
-
 router.get('/feed', async (req, res, next) => {
   try {
-    const feed = await getFeed();
-    const filtered = applyFilters(feed.value.items, req.query);
-
-    const sortKey = String(req.query.sort ?? 'priority');
-    const comparator = comparators[sortKey] ?? comparators.priority;
-    const sorted = [...filtered].sort(comparator);
-
-    const limit = Math.min(Math.max(int(req.query.limit, 50), 1), 500);
-    const page = Math.max(int(req.query.page, 1), 1);
-    const start = (page - 1) * limit;
-
-    // The feed only covers a recent window. If someone searched for a specific
-    // CVE that is not in it, ask the sources directly rather than returning
-    // nothing - this is the most common thing a visitor types.
-    let lookup = null;
-    const term = String(req.query.q ?? '').trim();
-    if (sorted.length === 0 && isCveId(term)) {
-      try {
-        const found = await lookupCve(term);
-        if (found.value.item) {
-          lookup = { sources: found.value.sources, lookedUpAt: found.value.lookedUpAt };
-          sorted.push(found.value.item);
-        }
-      } catch (error) {
-        lookup = { error: error.message };
-      }
-    }
-
-    res.json({
-      meta: {
-        ...feedMeta(feed),
-        sort: comparators[sortKey] ? sortKey : 'priority',
-        total: sorted.length,
-        totalUnfiltered: feed.value.items.length,
-        page,
-        limit,
-        pages: Math.max(Math.ceil(sorted.length / limit), 1),
-        ...(lookup ? { lookup } : {}),
-      },
-      stats: summarize(sorted),
-      sources: feed.value.sources,
-      items: sorted.slice(start, start + limit),
-    });
+    res.json(await queryFeed(req.query));
   } catch (error) {
     next(error);
   }
@@ -205,31 +42,9 @@ router.get('/sources', (_req, res) => {
 
 router.get('/cve/:id', async (req, res, next) => {
   try {
-    const feed = await getFeed();
-    const needle = String(req.params.id).toLowerCase();
-    const item = feed.value.items.find(
-      (candidate) =>
-        candidate.id?.toLowerCase() === needle ||
-        candidate.cveId?.toLowerCase() === needle ||
-        candidate.ghsaId?.toLowerCase() === needle ||
-        candidate.euvdId?.toLowerCase() === needle ||
-        candidate.advisoryId?.toLowerCase() === needle,
-    );
-
-    if (item) return res.json({ meta: feedMeta(feed), item });
-
-    if (isCveId(req.params.id)) {
-      const found = await lookupCve(req.params.id);
-      if (found.value.item) {
-        return res.json({
-          meta: { ...feedMeta(feed), lookup: { sources: found.value.sources, lookedUpAt: found.value.lookedUpAt } },
-          item: found.value.item,
-        });
-      }
-      return res.status(404).json({ error: `${req.params.id} was not found at any source.` });
-    }
-
-    res.status(404).json({ error: 'Not found in the current feed window.' });
+    const found = await findRecord(req.params.id);
+    if (!found.item) return res.status(404).json({ error: found.reason });
+    res.json({ meta: found.meta, item: found.item });
   } catch (error) {
     next(error);
   }

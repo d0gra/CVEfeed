@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node app.js",
     "dev": "node --watch app.js",
-    "warm": "node scripts/warm-cache.js"
+    "warm": "node scripts/warm-cache.js",
+    "test:mcp": "node test/mcp-conformance.mjs"
   },
   "keywords": [
     "cve",
@@ -19,7 +20,11 @@
     "cisa",
     "kev",
     "security",
-    "dashboard"
+    "dashboard",
+    "mcp",
+    "model-context-protocol",
+    "ai-security",
+    "agentic"
   ],
   "license": "GPL-3.0-or-later",
   "private": true,
@@ -27,6 +32,9 @@
     "compression": "^1.7.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "fast-xml-parser": "^4.5.1"
+    "fast-xml-parser": "^5.11.2"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2"
   }
 }

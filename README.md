@@ -6,7 +6,8 @@ directly from the upstream feeds and keeps a short-lived cache in memory plus a
 small JSON snapshot on disk.
 
 Vulnerabilities in the AI and agent stack - inference servers, agent
-frameworks, MCP servers, vector stores - get [a facet of their own](#the-ai-stack).
+frameworks, MCP servers, vector stores - get [a facet of their own](#the-ai-stack),
+and the whole feed is [consumable by agents over MCP](#mcp).
 
 Built to drop onto Hostinger's Node.js hosting with `npm install` + `npm start`.
 
@@ -81,6 +82,42 @@ ambiguous to stand alone need a qualifier: `ray serve`, never a bare `ray`.
 A typical week turns up a few dozen, four of them already on CISA's
 known-exploited list. Adding a project is one entry in the `SUBJECTS` table.
 
+## MCP
+
+`POST /mcp` speaks the Model Context Protocol over Streamable HTTP, so an agent
+can query the feed as a tool instead of scraping the page. No key, no account.
+
+| Tool | Does |
+| --- | --- |
+| `search_cves` | Filter by text, severity, CVSS, exploitation, AI-stack category or recency |
+| `get_cve` | One vulnerability by CVE, GHSA, EUVD or advisory ID, with the direct-source fallback |
+| `list_exploited` | What CISA has confirmed is being exploited, optionally scoped to the AI stack |
+| `feed_status` | Source health, data age and the available categories |
+
+```bash
+claude mcp add --transport http cvefeed https://yourdomain.com/mcp
+```
+
+Two decisions worth knowing about.
+
+**Responses are shaped for agents, not for completeness.** Twenty records cost
+~1,800 tokens rather than the ~12,100 the equivalent REST payload would, an 85%
+saving, because tools return a trimmed record. `detail: true` opts back into
+descriptions, CVSS vectors, CWEs, KEV guidance and reference URLs.
+
+**Advisory text is labelled untrusted, and reference URLs are not fetched.**
+CVE descriptions are third-party prose and references point at arbitrary pages,
+so every tool result carries a notice telling the agent to treat the content as
+data rather than instructions. A vulnerability feed is a poor thing to turn into
+an injection path.
+
+The protocol is implemented directly rather than through the official SDK, which
+pulls seventeen transitive dependencies including a second major version of
+Express. `npm run test:mcp` checks conformance against the real SDK client, as a
+dev dependency that never ships.
+
+`GET /llms.txt` describes all of this in prose, for agents handed only a domain.
+
 ## Dashboard
 
 - **Triage-first ordering** — actively exploited vulnerabilities, then CVSS, then recency
@@ -130,6 +167,8 @@ All endpoints return JSON.
 | `GET /api/cve/:id` | One record by CVE, GHSA, EUVD or advisory ID, falling back to a direct source lookup |
 | `POST /api/refresh` | Force a refetch (requires `REFRESH_TOKEN`) |
 | `GET /healthz` | Liveness, cache age, and the TTL/grace thresholds that give that age its meaning |
+| `POST /mcp` | Model Context Protocol endpoint ([see above](#mcp)) |
+| `GET /llms.txt` | Prose description of the service for agents |
 
 `GET /api/feed` accepts `q`, `severity` (`critical,high,medium,low,none`),
 `source`, `kind` (`cve` / `advisory`), `stack`, `exploited=1`, `minScore`,

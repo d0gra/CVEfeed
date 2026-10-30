@@ -139,6 +139,16 @@ curl https://yourdomain.com/healthz
 curl 'https://yourdomain.com/api/feed?limit=1' | head -c 400
 ```
 
+Check the agent surface too, since that is the part no browser will tell you
+about:
+
+```bash
+curl -s https://yourdomain.com/llms.txt | head -5
+curl -s -X POST https://yourdomain.com/mcp \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | head -c 200
+```
+
 `/healthz` reports cache age and the configured sources. The dashboard header
 also shows a pill per source with its record count, so a feed that is failing is
 visible at a glance.

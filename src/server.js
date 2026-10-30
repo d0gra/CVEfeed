@@ -5,6 +5,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import config from './config.js';
 import api from './routes/api.js';
+import { mountMcp } from './mcp.js';
+import { llmsTxt } from './llms.js';
 import { getFeed, feedCacheStatus } from './aggregate.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -80,6 +82,14 @@ export function createApp() {
       staleWhileRevalidateSeconds: Math.round(config.staleWhileRevalidateMs / 1000),
       sources: config.sources,
     });
+  });
+
+  // An MCP endpoint, so the feed is usable as a tool rather than only a page.
+  mountMcp(app, '/mcp');
+
+  // The convention agents look for when handed a bare domain.
+  app.get('/llms.txt', (_req, res) => {
+    res.type('text/plain; charset=utf-8').set('Cache-Control', 'public, max-age=3600').send(llmsTxt());
   });
 
   app.use('/api', api);
