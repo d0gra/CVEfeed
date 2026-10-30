@@ -41,6 +41,11 @@ const dom = {
   exploited: el('exploited'),
   severityChips: el('severity-chips'),
   sourceChips: el('source-chips'),
+  stackline: el('stackline'),
+  stackChips: el('stack-chips'),
+  stackOnly: el('stack-only'),
+  stackCount: el('stack-count'),
+  stackAlert: el('stack-alert'),
   refresh: el('refresh'),
   reset: el('reset'),
   theme: el('theme-toggle'),
@@ -55,6 +60,8 @@ const state = {
   exploited: false,
   severity: new Set(),
   source: new Set(),
+  stack: new Set(),
+  stackOnly: false,
   page: 1,
   limit: 50,
 };
@@ -62,6 +69,7 @@ const state = {
 let lastPayload = null;
 let inFlight = null;
 let revalidateTimer = null;
+let stackCategories = [];
 const expanded = new Set();
 
 /* ---------- utilities ---------- */
@@ -109,6 +117,16 @@ function readUrl() {
   state.page = Math.max(Number.parseInt(p.get('page') ?? '1', 10) || 1, 1);
   state.severity = new Set((p.get('severity') ?? '').split(',').filter(Boolean));
   state.source = new Set((p.get('source') ?? '').split(',').filter(Boolean));
+
+  const stack = (p.get('stack') ?? '').split(',').filter(Boolean);
+  state.stackOnly = stack.includes('any');
+  state.stack = new Set(stack.filter((v) => v !== 'any'));
+}
+
+/** Categories are more specific than the master toggle, so they win. */
+function stackParam() {
+  if (state.stack.size) return [...state.stack].join(',');
+  return state.stackOnly ? 'any' : '';
 }
 
 function writeUrl() {
@@ -119,6 +137,8 @@ function writeUrl() {
   if (state.exploited) p.set('exploited', '1');
   if (state.severity.size) p.set('severity', [...state.severity].join(','));
   if (state.source.size) p.set('source', [...state.source].join(','));
+  const stack = stackParam();
+  if (stack) p.set('stack', stack);
   if (state.page > 1) p.set('page', String(state.page));
   const qs = p.toString();
   history.replaceState(null, '', qs ? `?${qs}` : location.pathname);
@@ -188,6 +208,32 @@ function renderChips(stats) {
         aria-pressed="${state.source.has(id)}">${escapeHtml(SOURCE_LABELS[id])}<b>${count}</b></button>`;
     })
     .join('');
+
+  renderStackChips(stats);
+}
+
+function renderStackChips(stats) {
+  if (!stackCategories.length) return;
+  dom.stackline.hidden = false;
+
+  const total = stats?.inStack ?? 0;
+  const exploited = stats?.stackExploited ?? 0;
+  dom.stackCount.textContent = total.toLocaleString();
+  dom.stackOnly.checked = state.stackOnly && !state.stack.size;
+
+  // The single most useful fact this facet surfaces: part of the AI stack is
+  // under active exploitation right now.
+  dom.stackAlert.hidden = exploited === 0;
+  dom.stackAlert.textContent = exploited ? `${exploited} exploited` : '';
+
+  dom.stackChips.innerHTML = stackCategories
+    .map((cat) => {
+      const count = stats?.byStack?.[cat.id] ?? 0;
+      return `<button type="button" class="chip" data-stack="${cat.id}" data-empty="${count === 0}"
+        title="${escapeHtml(cat.blurb)}"
+        aria-pressed="${state.stack.has(cat.id)}">${escapeHtml(cat.name)}<b>${count}</b></button>`;
+    })
+    .join('');
 }
 
 function metaLine(item) {
@@ -214,6 +260,13 @@ function badges(item) {
     out.push(`<span class="flag flag-quiet">EPSS ${item.epss.toFixed(1)}%</span>`);
   }
   if (item.outsideWindow) out.push('<span class="flag flag-quiet">Looked up</span>');
+  // Name the affected project rather than the category: "vLLM" says more at a
+  // glance than "Inference & serving", and the category is a click away.
+  if (item.stack?.categories?.length) {
+    const label = (item.stack.labels ?? item.stack.subjects).slice(0, 2).join(', ');
+    const title = item.stack.categoryNames.join(', ');
+    out.push(`<span class="flag flag-stack" title="${escapeHtml(title)}">${escapeHtml(label)}</span>`);
+  }
   return out;
 }
 
@@ -405,6 +458,8 @@ function buildQuery() {
   if (state.exploited) p.set('exploited', '1');
   if (state.severity.size) p.set('severity', [...state.severity].join(','));
   if (state.source.size) p.set('source', [...state.source].join(','));
+  const stack = stackParam();
+  if (stack) p.set('stack', stack);
   p.set('page', String(state.page));
   p.set('limit', String(state.limit));
   return p.toString();
@@ -505,6 +560,21 @@ dom.sourceChips.addEventListener('click', (event) => {
   apply();
 });
 
+dom.stackChips.addEventListener('click', (event) => {
+  const chip = event.target.closest('[data-stack]');
+  if (!chip) return;
+  // Picking a category is a narrower statement than "only the AI stack".
+  state.stackOnly = false;
+  toggleSet(state.stack, chip.dataset.stack);
+  apply();
+});
+
+dom.stackOnly.addEventListener('change', () => {
+  state.stackOnly = dom.stackOnly.checked;
+  if (state.stackOnly) state.stack.clear();
+  apply();
+});
+
 dom.stats.addEventListener('click', (event) => {
   const tile = event.target.closest('[data-filter]');
   if (!tile) return;
@@ -564,6 +634,8 @@ dom.reset.addEventListener('click', () => {
   state.exploited = false;
   state.severity.clear();
   state.source.clear();
+  state.stack.clear();
+  state.stackOnly = false;
   syncControls();
   apply();
 });
@@ -594,6 +666,7 @@ function syncControls() {
   dom.sort.value = state.sort;
   dom.days.value = String(state.days);
   dom.exploited.checked = state.exploited;
+  dom.stackOnly.checked = state.stackOnly && !state.stack.size;
 }
 
 /* ---------- boot ---------- */
@@ -604,8 +677,21 @@ try {
   applyTheme('dark');
 }
 
+// Load the facet definitions before the first render so the row appears with
+// the page rather than popping in, and so the UI never hardcodes the taxonomy.
+async function loadStackFacets() {
+  try {
+    const response = await fetch('/api/stack');
+    if (!response.ok) return;
+    stackCategories = (await response.json()).categories ?? [];
+  } catch {
+    stackCategories = [];
+  }
+}
+
 readUrl();
 syncControls();
+await loadStackFacets();
 renderChips(null);
 load({ showSkeletons: true });
 

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CVE Feed</title>
-<meta name="description" content="A reading view of current vulnerability disclosures, drawn from NVD, CISA, GitHub and ENISA.">
+<meta name="description" content="A reading view of current vulnerability disclosures, drawn from NVD, CISA, GitHub and ENISA, with a dedicated facet for the AI and agent stack.">
 <meta name="color-scheme" content="dark light">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230c0d10'/><path d='M9 22V10h3.4l3.6 7.2L19.6 10H23v12h-2.6v-7.6L17 22h-2l-3.4-7.6V22z' fill='%23e8e6e3'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -31,7 +31,8 @@
 
   <p class="standfirst">
     Current vulnerability disclosures, drawn together from five public registers
-    and ordered by what warrants attention first.
+    and ordered by what warrants attention first, with the AI and agent stack
+    called out separately.
   </p>
 
   <div class="sourceline" id="sources" aria-label="Source status"></div>
@@ -44,6 +45,17 @@
     <div class="searchline">
       <input type="search" id="q" placeholder="Search by CVE, vendor, product or keyword" autocomplete="off" aria-label="Search">
       <button type="button" id="clear-q" class="quiet" hidden>Clear</button>
+    </div>
+
+    <div class="stackline" id="stackline" hidden>
+      <span class="stack-label">AI&nbsp;stack</span>
+      <label class="toggle">
+        <input type="checkbox" id="stack-only">
+        <span>Only<b id="stack-count">0</b></span>
+      </label>
+      <span class="stack-alert" id="stack-alert" hidden></span>
+      <span class="rule" aria-hidden="true"></span>
+      <div class="facet" id="stack-chips" role="group" aria-label="AI stack category"></div>
     </div>
 
     <div class="filterline">

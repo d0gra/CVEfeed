@@ -5,6 +5,9 @@ sources. **No database, no build step, no API keys required** — it fetches
 directly from the upstream feeds and keeps a short-lived cache in memory plus a
 small JSON snapshot on disk.
 
+Vulnerabilities in the AI and agent stack - inference servers, agent
+frameworks, MCP servers, vector stores - get [a facet of their own](#the-ai-stack).
+
 Built to drop onto Hostinger's Node.js hosting with `npm install` + `npm start`.
 
 ## Sources
@@ -61,10 +64,27 @@ remediation deadline come back for any CVE at no extra request.
 Full-text search across every CVE ever published is deliberately *not*
 supported: that needs an index, which means the database this app avoids.
 
+## The AI stack
+
+Vulnerabilities in the software agents are built on get their own facet:
+inference servers, agent frameworks, MCP servers, vector stores, MLOps
+platforms, model runtimes and chat interfaces. Pick a category, or use **Only**
+to narrow the whole feed to the stack.
+
+This is not a keyword search. Grepping descriptions for "ray", "dify" or
+"agent" returns array, modify and user agent, so [`src/stack.js`](src/stack.js)
+matches structured fields first - exact package names from GitHub advisories
+(`vllm`, `@modelcontextprotocol/sdk`), then vendors from KEV and EUVD - and
+falls back to word-bounded prose only for records that carry neither. Names too
+ambiguous to stand alone need a qualifier: `ray serve`, never a bare `ray`.
+
+A typical week turns up a few dozen, four of them already on CISA's
+known-exploited list. Adding a project is one entry in the `SUBJECTS` table.
+
 ## Dashboard
 
 - **Triage-first ordering** — actively exploited vulnerabilities, then CVSS, then recency
-- **Filters** for severity, source, time window, exploited-only, and free-text search across IDs, vendors, products, CWEs and descriptions
+- **Filters** for severity, source, AI-stack category, time window, exploited-only, and free-text search across IDs, vendors, products, CWEs and descriptions
 - **Shareable URLs** — every filter is reflected in the query string
 - **Source health** pills in the header show which feeds responded, with counts and latency
 - **Expandable rows** with the CVSS vector, EPSS likelihood, KEV required action, references and per-source links
@@ -106,18 +126,30 @@ All endpoints return JSON.
 | `GET /api/feed` | Merged, filtered, paginated feed with stats and source health |
 | `GET /api/stats` | Summary counts only |
 | `GET /api/sources` | Configured sources and their metadata |
+| `GET /api/stack` | The AI-stack categories the feed classifies against |
 | `GET /api/cve/:id` | One record by CVE, GHSA, EUVD or advisory ID, falling back to a direct source lookup |
 | `POST /api/refresh` | Force a refetch (requires `REFRESH_TOKEN`) |
 | `GET /healthz` | Liveness, cache age, and the TTL/grace thresholds that give that age its meaning |
 
 `GET /api/feed` accepts `q`, `severity` (`critical,high,medium,low,none`),
-`source`, `kind` (`cve` / `advisory`), `exploited=1`, `minScore`, `days`,
-`sort` (`priority`, `newest`, `updated`, `score`, `epss`, `severity`), `page`
-and `limit` (max 500).
+`source`, `kind` (`cve` / `advisory`), `stack`, `exploited=1`, `minScore`,
+`days`, `sort` (`priority`, `newest`, `updated`, `score`, `epss`, `severity`),
+`page` and `limit` (max 500).
+
+`stack` takes `any` for everything classified, or a comma-separated list of
+`inference`, `agents`, `mcp`, `retrieval`, `mlops`, `runtime`, `apps`. Each
+classified record carries a `stack` object with its categories and the projects
+matched, and `stats` gains `byStack`, `inStack` and `stackExploited`.
 
 ```bash
 # Actively exploited criticals from the last week
 curl 'localhost:3000/api/feed?exploited=1&severity=critical&days=7&limit=5'
+
+# Anything in the AI stack that is already being exploited
+curl 'localhost:3000/api/feed?stack=any&exploited=1'
+
+# MCP servers and agent frameworks only
+curl 'localhost:3000/api/feed?stack=mcp,agents'
 ```
 
 ## Deployment

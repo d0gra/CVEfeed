@@ -4,6 +4,7 @@ import { comparators, getFeed } from '../aggregate.js';
 import { SEVERITY_ORDER } from '../lib/severity.js';
 import { isCveId, lookupCve } from '../lookup.js';
 import { enabledSources } from '../sources/index.js';
+import { STACK_CATEGORY_IDS, stackFacets } from '../stack.js';
 
 const router = Router();
 
@@ -22,6 +23,9 @@ function applyFilters(items, query) {
   const severities = asList(query.severity).filter((s) => SEVERITY_ORDER.includes(s));
   const sources = asList(query.source);
   const kinds = asList(query.kind);
+  const stackRaw = asList(query.stack);
+  const anyStack = stackRaw.includes('any') || stackRaw.includes('all');
+  const stacks = stackRaw.filter((s) => STACK_CATEGORY_IDS.includes(s));
   const needle = String(query.q ?? '').trim().toLowerCase();
   const minScore = Number.parseFloat(query.minScore);
   const days = int(query.days, 0);
@@ -33,6 +37,8 @@ function applyFilters(items, query) {
     if (severities.length && !severities.includes(item.severity)) return false;
     if (sources.length && !item.sourceIds.some((id) => sources.includes(id))) return false;
     if (kinds.length && !kinds.includes(item.kind)) return false;
+    if (anyStack && !item.stack) return false;
+    if (stacks.length && !item.stack?.categories.some((c) => stacks.includes(c))) return false;
     if (exploitedOnly && !item.exploited) return false;
     if (Number.isFinite(minScore) && (item.score ?? -1) < minScore) return false;
 
@@ -54,6 +60,8 @@ function applyFilters(items, query) {
         item.product,
         item.cwes.join(' '),
         item.tags.join(' '),
+        item.stack?.subjects.join(' '),
+        item.stack?.categoryNames.join(' '),
       ]
         .filter(Boolean)
         .join(' ')
@@ -68,6 +76,9 @@ function applyFilters(items, query) {
 function summarize(items) {
   const bySeverity = Object.fromEntries(SEVERITY_ORDER.map((s) => [s, 0]));
   const bySource = {};
+  const byStack = Object.fromEntries(STACK_CATEGORY_IDS.map((id) => [id, 0]));
+  let inStack = 0;
+  let stackExploited = 0;
   let exploited = 0;
   let scored = 0;
   let scoreTotal = 0;
@@ -77,6 +88,11 @@ function summarize(items) {
   for (const item of items) {
     bySeverity[item.severity] = (bySeverity[item.severity] ?? 0) + 1;
     for (const id of item.sourceIds) bySource[id] = (bySource[id] ?? 0) + 1;
+    if (item.stack) {
+      inStack += 1;
+      if (item.exploited) stackExploited += 1;
+      for (const c of item.stack.categories) byStack[c] = (byStack[c] ?? 0) + 1;
+    }
     if (item.exploited) exploited += 1;
     if (Number.isFinite(item.score)) {
       scored += 1;
@@ -90,6 +106,9 @@ function summarize(items) {
     total: items.length,
     bySeverity,
     bySource,
+    byStack,
+    inStack,
+    stackExploited,
     exploited,
     last24h: fresh,
     averageScore: scored ? Number((scoreTotal / scored).toFixed(1)) : null,
@@ -170,6 +189,11 @@ router.get('/stats', async (_req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+/** The AI-stack facet definitions, so the dashboard renders from one source. */
+router.get('/stack', (_req, res) => {
+  res.json({ categories: stackFacets() });
 });
 
 router.get('/sources', (_req, res) => {

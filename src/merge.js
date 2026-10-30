@@ -1,4 +1,5 @@
 import { severityFromScore, severityRank } from './lib/severity.js';
+import { classifyStack } from './stack.js';
 
 /**
  * Shared record-merging rules.
@@ -108,10 +109,13 @@ export function finalize(record) {
   // Severity always follows the merged CVSS score; exploitation is separate.
   const severity = severityFromScore(rest.score);
 
+  const stack = classifyStack(rest);
+
   return {
     ...rest,
     severity,
     severityRank: severityRank(severity),
+    stack,
     cwes: [...cweSet].sort(),
     tags: [...tagSet].sort(),
     references: [...refMap.values()].slice(0, 15),
