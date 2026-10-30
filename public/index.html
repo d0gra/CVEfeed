@@ -5,6 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CVE Feed</title>
 <meta name="description" content="A reading view of current vulnerability disclosures, drawn from NVD, CISA, GitHub and ENISA, with a dedicated facet for the AI and agent stack.">
+<link rel="canonical" href="__SITE_URL__/">
+<meta name="robots" content="index,follow,max-snippet:-1,max-image-preview:large">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="CVE Feed">
+<meta property="og:title" content="CVE Feed - current vulnerability disclosures">
+<meta property="og:description" content="Five public registers merged into one feed, with a dedicated view of the AI and agent stack. Readable by people and by agents over MCP.">
+<meta property="og:url" content="__SITE_URL__/">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="CVE Feed - current vulnerability disclosures">
+<meta name="twitter:description" content="Five public registers merged into one feed, with a dedicated view of the AI and agent stack.">
 <meta name="color-scheme" content="dark light">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230c0d10'/><path d='M9 22V10h3.4l3.6 7.2L19.6 10H23v12h-2.6v-7.6L17 22h-2l-3.4-7.6V22z' fill='%23e8e6e3'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -34,6 +44,11 @@
     and ordered by what warrants attention first, with the AI and agent stack
     called out separately.
   </p>
+  <p class="crosslinks">
+    <a href="/ai-stack">Browse the AI stack</a>
+    <a href="/exploited">What is being exploited</a>
+    <a href="/mcp">Use it from an agent</a>
+  </p>
 
   <div class="sourceline" id="sources" aria-label="Source status"></div>
 </header>
@@ -51,9 +66,9 @@
       <span class="stack-label">AI&nbsp;stack</span>
       <label class="toggle">
         <input type="checkbox" id="stack-only">
-        <span>Only<b id="stack-count">0</b></span>
+        <span>Only</span>
       </label>
-      <span class="stack-alert" id="stack-alert" hidden></span>
+      <span class="stack-counts" id="stack-counts"></span>
       <span class="rule" aria-hidden="true"></span>
       <div class="facet" id="stack-chips" role="group" aria-label="AI stack category"></div>
     </div>

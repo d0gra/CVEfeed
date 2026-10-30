@@ -30,6 +30,17 @@ export function mergeKey(item) {
   return `${item.source}:${item.id}`;
 }
 
+/**
+ * Number(null) is 0 and Number('') is 0, so a source that reports "no score"
+ * explicitly would otherwise land in the feed as a CVSS of 0.0. Absent and
+ * zero are different facts here.
+ */
+function num(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
 export function seed(item, sourceMeta) {
   return {
     key: mergeKey(item),
@@ -41,10 +52,10 @@ export function seed(item, sourceMeta) {
     kind: item.source === 'cisa' ? 'advisory' : 'cve',
     title: item.title,
     description: item.description ?? '',
-    score: Number.isFinite(Number(item.score)) ? Number(item.score) : null,
+    score: num(item.score),
     scoreVersion: item.scoreVersion ?? null,
     vector: item.vector ?? null,
-    epss: Number.isFinite(Number(item.epss)) ? Number(item.epss) : null,
+    epss: num(item.epss),
     published: item.published ?? null,
     modified: item.modified ?? null,
     vendor: item.vendor ?? null,

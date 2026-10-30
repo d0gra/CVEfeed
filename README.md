@@ -82,6 +82,29 @@ ambiguous to stand alone need a qualifier: `ray serve`, never a bare `ray`.
 A typical week turns up a few dozen, four of them already on CISA's
 known-exploited list. Adding a project is one entry in the `SUBJECTS` table.
 
+## Pages
+
+The dashboard is a client-side app, which means a crawler, a link preview and
+`curl` all see an empty shell. These pages are rendered on the server and are
+complete without JavaScript:
+
+| Path | What it is |
+| --- | --- |
+| `/cve/:id` | One page per vulnerability, merging what every source says, with `TechArticle` and `BreadcrumbList` structured data |
+| `/ai-stack` | The AI-stack overview and its categories |
+| `/ai-stack/:category` | One page per category, listing what is currently disclosed |
+| `/exploited` | Everything CISA has confirmed is being exploited |
+| `/mcp` | The page for agents — served here when a browser asks for HTML, the protocol when an MCP client does |
+| `/robots.txt`, `/sitemap.xml` | Generated from the live feed |
+
+Unknown paths return a real 404. Serving the dashboard for every address would
+answer 200 for anything on the domain, which is an unbounded supply of
+near-duplicate pages for a crawler to find.
+
+Set `SITE_URL` in production: canonical URLs, sitemap entries and Open Graph
+tags need an absolute origin, and behind a TLS-terminating proxy the request's
+own scheme is `http`.
+
 ## MCP
 
 `POST /mcp` speaks the Model Context Protocol over Streamable HTTP, so an agent
@@ -125,6 +148,7 @@ dev dependency that never ships.
 - **Shareable URLs** — every filter is reflected in the query string
 - **Source health** pills in the header show which feeds responded, with counts and latency
 - **Expandable rows** with the CVSS vector, EPSS likelihood, KEV required action, references and per-source links
+- **Copy what you came for** — the identifier, the CVSS vector, any reference URL, a permalink, or the whole advisory as Markdown for a ticket
 - Light/dark themes, keyboard search (`/`), and a responsive layout
 
 ## Configuration

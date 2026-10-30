@@ -35,6 +35,10 @@ export const config = {
   githubToken: process.env.GITHUB_TOKEN || '',
   diskCache: bool(process.env.DISK_CACHE, true),
   diskCacheDir: path.resolve(process.cwd(), process.env.DISK_CACHE_DIR || '.cache'),
+  // Canonical origin for links search engines and agents must agree on. Falls
+  // back to the request's own host, which is right in development and wrong
+  // behind a proxy that terminates TLS, so set it in production.
+  siteUrl: (process.env.SITE_URL || '').replace(/\/+$/, ''),
   refreshToken: process.env.REFRESH_TOKEN || '',
   requestTimeoutMs: clamp(int(process.env.REQUEST_TIMEOUT_SECONDS, 25), 5, 120) * 1000,
   userAgent:

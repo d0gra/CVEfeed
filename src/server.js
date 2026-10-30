@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import config from './config.js';
 import api from './routes/api.js';
 import { mountMcp } from './mcp.js';
+import pages, { agentsPageHandler, assetVersionValue, setAssetVersion } from './routes/pages.js';
+import { missingPage, originFor } from './pages/index.js';
 import { llmsTxt } from './llms.js';
 import { getFeed, feedCacheStatus } from './aggregate.js';
 
@@ -32,7 +34,14 @@ function buildIndexHtml() {
     newest = Date.now();
   }
 
-  return html.replaceAll('__ASSET_VERSION__', Math.round(newest).toString(36));
+  const version = Math.round(newest).toString(36);
+  // The rendered pages fingerprint their assets from the same stamp.
+  setAssetVersion(version);
+  return html
+    .replaceAll('__ASSET_VERSION__', version)
+    // Relative canonicals are legal; absolute ones are what crawlers and link
+    // previews agree on, so SITE_URL is stamped in when it is configured.
+    .replaceAll('__SITE_URL__', config.siteUrl);
 }
 
 export function createApp() {
@@ -84,8 +93,14 @@ export function createApp() {
     });
   });
 
+  // A browser asking for /mcp gets the page; an MCP client gets the protocol.
+  app.get('/mcp', agentsPageHandler);
+
   // An MCP endpoint, so the feed is usable as a tool rather than only a page.
   mountMcp(app, '/mcp');
+
+  // Server-rendered pages: what a crawler, a link preview or curl actually sees.
+  app.use(pages);
 
   // The convention agents look for when handed a bare domain.
   app.get('/llms.txt', (_req, res) => {
@@ -103,14 +118,38 @@ export function createApp() {
     }),
   );
 
-  app.use((req, res, next) => {
-    if (req.method !== 'GET' || req.path.startsWith('/api')) return next();
-    sendIndex(req, res);
+  // Unknown paths get a real 404. Serving the dashboard here instead would
+  // answer 200 for every address on the domain, which is an unbounded supply
+  // of near-duplicate pages for a crawler to find.
+  app.use((req, res) => {
+    if (req.method === 'GET' && !req.path.startsWith('/api') && req.accepts('html')) {
+      return res
+        .status(404)
+        .type('html')
+        .send(
+          missingPage({
+            canonical: `${originFor(req)}${req.path}`,
+            assetVersion: assetVersionValue(),
+            path: req.path,
+          }),
+        );
+    }
+    res.status(404).json({ error: 'Not found' });
   });
 
-  app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
+  app.use((error, req, res, next) => {
+    // A body the parser could not read is the client's mistake, not an
+    // upstream failure, and the MCP endpoint owes it a JSON-RPC parse error
+    // rather than the generic 502 below.
+    if (error?.type === 'entity.parse.failed' || error instanceof SyntaxError) {
+      if (req.path === '/mcp') {
+        return res
+          .status(400)
+          .json({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error: body is not valid JSON.' } });
+      }
+      return res.status(400).json({ error: 'Invalid JSON body.' });
+    }
 
-  app.use((error, _req, res, _next) => {
     console.error('[cvefeed]', error.message);
     res.status(502).json({
       error: 'Upstream feed error',

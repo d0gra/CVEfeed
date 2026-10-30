@@ -21,6 +21,8 @@
 
   /* A cool counterpoint to the warm accent: the AI-stack facet is a different
      dimension from severity, so it should not read as another severity. */
+  --copy-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='%23000' d='M10 1H3a1 1 0 0 0-1 1v9h2V3h6V1zm3 3H6a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1zm-1 9H7V6h5v7z'/%3E%3C/svg%3E");
+
   --stack: #5a9c98;
   --stack-ink: #76b8b2;
 
@@ -310,12 +312,32 @@ button.figure[aria-pressed="true"] .figure-label::after {
   color: var(--stack-ink);
   border-bottom-color: var(--stack);
 }
-.stack-alert {
-  font-size: 10.5px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--critical);
+.stack-counts {
+  font-size: 12px;
+  color: var(--ink-faint);
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
 }
+.stack-counts .dot { opacity: 0.5; }
+.stack-exploited {
+  all: unset;
+  cursor: pointer;
+  color: var(--critical);
+  border-bottom: 1px solid transparent;
+}
+.stack-exploited:hover { border-bottom-color: currentColor; }
+.stack-exploited:focus-visible { outline: 2px solid var(--critical); outline-offset: 2px; }
+
+.crosslinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 20px;
+  margin: 14px 0 0;
+  font-size: 12.5px;
+}
+.crosslinks a { color: var(--ink-faint); text-decoration: none; border-bottom: 1px solid var(--hair-strong); padding-bottom: 1px; }
+.crosslinks a:hover { color: var(--accent-ink); border-bottom-color: var(--accent); }
 .flag-stack { color: var(--stack-ink); }
 
 .facet { display: flex; gap: 14px; flex-wrap: wrap; }
@@ -404,20 +426,35 @@ select:hover { color: var(--ink); border-bottom-color: var(--accent); }
 .entry { border-bottom: 1px solid var(--hair); }
 
 .entry-head {
+  position: relative;
   display: grid;
   grid-template-columns: 58px 1fr auto;
   gap: 20px;
   align-items: baseline;
   width: 100%;
   padding: 17px 0;
-  background: none;
-  border: 0;
-  font: inherit;
-  color: inherit;
   text-align: left;
   cursor: pointer;
 }
 .entry-head:hover .entry-title { color: var(--accent-ink); }
+
+/* The toggle is a real button for keyboard and screen readers, stretched over
+   the row so the whole thing stays clickable - without trapping the text in a
+   button, where it could not be selected. */
+.entry-toggle {
+  all: unset;
+  cursor: pointer;
+  display: inline;
+}
+.entry-toggle::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+}
+.entry-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/* Above the stretched hit area, so its own controls and text selection win. */
+.entry-meta { position: relative; z-index: 1; }
 
 .mark { text-align: right; padding-top: 1px; }
 .mark-score {
@@ -465,6 +502,91 @@ select:hover { color: var(--ink); border-bottom-color: var(--accent); }
   font-size: 11.5px;
   color: var(--ink-soft);
   letter-spacing: -0.01em;
+  user-select: text;
+}
+/* The glyph only appears once the row is worth acting on, so the meta line
+   stays quiet at rest. */
+.entry-meta .id .copy.icon { margin-left: 6px; margin-right: 0; opacity: 0; transition: opacity 0.12s; }
+.entry:hover .entry-meta .id .copy.icon,
+.entry-meta .id .copy.icon:focus-visible,
+.entry-meta .id .copy.icon[data-copied] { opacity: 0.45; }
+.entry-meta .id .copy.icon:hover { opacity: 1; }
+
+/* ---------- copy controls ---------- */
+
+.copy {
+  all: unset;
+  position: relative;
+  cursor: pointer;
+  color: inherit;
+}
+.copy:hover .copy-label { color: var(--accent-ink); }
+.copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+/* A quiet mark that something was copied, where the eye already is. */
+.copy::after {
+  content: attr(data-note);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 5px);
+  transform: translateX(-50%);
+  padding: 2px 6px;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--sans);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border-radius: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+}
+.copy[data-copied] { --note: ''; }
+.copy[data-copied]::after { opacity: 1; }
+.copy[data-copied="yes"]::after { content: 'Copied'; }
+.copy[data-copied="failed"]::after { content: 'Press ctrl+C'; background: var(--critical); }
+
+.copy.quiet .copy-label {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  border-bottom: 1px solid var(--hair-strong);
+  padding-bottom: 1px;
+}
+.copy.tiny .copy-label { font-size: 10px; border-bottom: 0; }
+
+.copy.vector .copy-label {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
+/* The per-reference control is a glyph, so the URL keeps the room. */
+.copy.icon {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  margin-right: 8px;
+  vertical-align: baseline;
+  border: 0;
+  padding: 0;
+  opacity: 0.45;
+  background-color: currentColor;
+  -webkit-mask: var(--copy-glyph) center / 11px 11px no-repeat;
+  mask: var(--copy-glyph) center / 11px 11px no-repeat;
+  display: inline-block;
+}
+.copy.icon:hover { opacity: 1; color: var(--accent-ink); }
+
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin-bottom: 18px;
 }
 
 .flag {
@@ -544,6 +666,7 @@ select:hover { color: var(--ink); border-bottom-color: var(--accent); }
 .outlinks { display: flex; flex-wrap: wrap; gap: 0 18px; font-size: 13px; }
 
 .refs { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.refs li { display: flex; align-items: baseline; }
 .refs a { font-family: var(--mono); font-size: 11.5px; color: var(--ink-soft); overflow-wrap: anywhere; }
 
 /* --------------------------------------------------- notices / empty / etc */

@@ -44,8 +44,7 @@ const dom = {
   stackline: el('stackline'),
   stackChips: el('stack-chips'),
   stackOnly: el('stack-only'),
-  stackCount: el('stack-count'),
-  stackAlert: el('stack-alert'),
+  stackCounts: el('stack-counts'),
   refresh: el('refresh'),
   reset: el('reset'),
   theme: el('theme-toggle'),
@@ -218,13 +217,19 @@ function renderStackChips(stats) {
 
   const total = stats?.inStack ?? 0;
   const exploited = stats?.stackExploited ?? 0;
-  dom.stackCount.textContent = total.toLocaleString();
   dom.stackOnly.checked = state.stackOnly && !state.stack.size;
 
-  // The single most useful fact this facet surfaces: part of the AI stack is
-  // under active exploitation right now.
-  dom.stackAlert.hidden = exploited === 0;
-  dom.stackAlert.textContent = exploited ? `${exploited} exploited` : '';
+  // One phrase rather than a count hanging off the toggle, which read as
+  // "Only 62" and, once the exploited filter was on, "Only 4 - 4 exploited".
+  const parts = [`${total.toLocaleString()} tracked`];
+  // Saying "4 exploited" beside a list already filtered to exploited records
+  // tells the reader nothing they cannot see.
+  if (exploited > 0 && !state.exploited) {
+    parts.push(
+      `<button type="button" class="stack-exploited" data-stack-exploited>${exploited} exploited</button>`,
+    );
+  }
+  dom.stackCounts.innerHTML = total === 0 ? '' : parts.join(' <span class="dot">·</span> ');
 
   dom.stackChips.innerHTML = stackCategories
     .map((cat) => {
@@ -236,19 +241,51 @@ function renderStackChips(stats) {
     .join('');
 }
 
-function metaLine(item) {
-  const bits = [`<span class="id">${escapeHtml(
-    item.cveId ?? item.ghsaId ?? item.advisoryId ?? item.id,
-  )}</span>`];
+function metaLine(item, id = item.cveId ?? item.id) {
+  // The ID is plain text so it can be selected and dragged like text, with the
+  // glyph beside it for people who would rather click once.
+  const bits = [`<span class="id">${escapeHtml(id)}${copyButton('', id, 'icon', `Copy ${id}`)}</span>`];
 
   bits.push(...badges(item));
   bits.push(`<span title="${escapeHtml(fullDate(item.published))}">${relativeTime(item.published)}</span>`);
 
-  const subject = [item.vendor, item.product].filter(Boolean).join(' · ');
+  const subject = [item.vendor, item.product].filter(Boolean).join(' \u00b7 ');
   if (subject) bits.push(`<span>${escapeHtml(subject)}</span>`);
   if (item.cwes?.length) bits.push(`<span>${escapeHtml(item.cwes.slice(0, 2).join(', '))}</span>`);
 
   return bits.join('');
+}
+
+/** A summary that survives being pasted into a ticket or a chat. */
+function markdownFor(item, id) {
+  const lines = [`## ${id} - ${item.title}`, ''];
+
+  const facts = [
+    item.score != null ? `**CVSS** ${item.score} (${item.severity}${item.scoreVersion ? `, v${item.scoreVersion}` : ''})` : '**CVSS** unscored',
+    Number.isFinite(item.epss) ? `**EPSS** ${item.epss}%` : null,
+    item.exploited ? '**Known exploited** yes (CISA KEV)' : null,
+    item.kev?.dueDate ? `**Federal deadline** ${fullDate(item.kev.dueDate)}` : null,
+    item.published ? `**Published** ${fullDate(item.published)}` : null,
+    item.stack?.subjects?.length ? `**AI stack** ${item.stack.subjects.join(', ')}` : null,
+  ].filter(Boolean);
+  lines.push(facts.join('  \n'), '');
+
+  if (item.description) lines.push(item.description, '');
+  if (item.vector) lines.push(`\`${item.vector}\``, '');
+
+  const refs = (item.references ?? []).filter((r) => r.url).slice(0, 6);
+  if (refs.length) {
+    lines.push('### References', ...refs.map((r) => `- ${r.url}`), '');
+  }
+
+  lines.push(`Source: ${location.origin}/cve/${encodeURIComponent(id)}`);
+  return lines.join('\n');
+}
+
+/** A click-to-copy control. The label is what you see, the value what you get. */
+function copyButton(label, value, extraClass = '', title = 'Copy') {
+  return `<button type="button" class="copy ${extraClass}" data-copy="${escapeHtml(value)}"
+    title="${escapeHtml(title)}"><span class="copy-label">${escapeHtml(label)}</span></button>`;
 }
 
 function badges(item) {
@@ -270,8 +307,15 @@ function badges(item) {
   return out;
 }
 
-function detailHtml(item) {
+function detailHtml(item, id = item.cveId ?? item.id) {
   const blocks = [];
+
+  // The actions people reach for: a shareable link, and something pasteable
+  // into a ticket without reformatting.
+  blocks.push(`<div class="detail-actions">
+    ${copyButton('Copy link', `${location.origin}/cve/${encodeURIComponent(id)}`, 'quiet', 'Copy a permalink to this advisory')}
+    ${copyButton('Copy as Markdown', markdownFor(item, id), 'quiet', 'Copy a summary ready to paste into a ticket')}
+  </div>`);
 
   if (item.description) {
     blocks.push(`<p class="lede">${escapeHtml(item.description)}</p>`);
@@ -305,7 +349,12 @@ function detailHtml(item) {
     .join('')}</dl></div>`);
 
   if (item.vector) {
-    blocks.push(`<div class="block"><h4>Vector</h4><p class="vector">${escapeHtml(item.vector)}</p></div>`);
+    blocks.push(`<div class="block"><h4>Vector</h4>${copyButton(
+      item.vector,
+      item.vector,
+      'vector',
+      'Copy the CVSS vector',
+    )}</div>`);
   }
 
   const links = Object.entries(item.links ?? {}).filter(([, url]) => url);
@@ -322,12 +371,17 @@ function detailHtml(item) {
 
   const refs = (item.references ?? []).filter((r) => r.url).slice(0, 6);
   if (refs.length) {
-    blocks.push(`<div class="block"><h4>References</h4><ul class="refs">${refs
-      .map(
-        (r) =>
-          `<li><a href="${escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.url)}</a></li>`,
-      )
-      .join('')}</ul></div>`);
+    const all = refs.map((r) => r.url).join('\n');
+    blocks.push(`<div class="block">
+      <h4>References ${refs.length > 1 ? copyButton('copy all', all, 'quiet tiny', 'Copy every reference URL') : ''}</h4>
+      <ul class="refs">${refs
+        .map(
+          (r) =>
+            `<li>${copyButton('', r.url, 'icon', 'Copy this URL')}<a href="${escapeHtml(
+              r.url,
+            )}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.url)}</a></li>`,
+        )
+        .join('')}</ul></div>`);
   }
 
   return blocks.join('');
@@ -336,23 +390,29 @@ function detailHtml(item) {
 function cardHtml(item) {
   const sev = item.severity ?? 'none';
   const isOpen = expanded.has(item.key);
-  const score = item.score !== null && item.score !== undefined ? item.score.toFixed(1) : '—';
+  const score = item.score !== null && item.score !== undefined ? item.score.toFixed(1) : '\u2014';
+  const id = item.cveId ?? item.ghsaId ?? item.advisoryId ?? item.id;
 
+  // The toggle covers the row through a stretched pseudo-element rather than
+  // by wrapping it: text inside a button cannot be selected, and the ID is the
+  // thing people most often want to copy.
   return `<li class="entry" data-open="${isOpen}" data-key="${escapeHtml(item.key)}">
-    <button type="button" class="entry-head" aria-expanded="${isOpen}">
+    <div class="entry-head">
       <span class="mark" style="--tone:var(--${sev === 'none' ? 'unscored' : sev})">
         <span class="mark-score">${score}</span>
         <span class="mark-sev">${escapeHtml(SEV_SHORT[sev] ?? sev)}</span>
       </span>
       <span class="entry-body">
-        <h3 class="entry-title">${escapeHtml(item.title)}</h3>
-        <span class="entry-meta">${metaLine(item)}</span>
+        <h3 class="entry-title">
+          <button type="button" class="entry-toggle" aria-expanded="${isOpen}">${escapeHtml(item.title)}</button>
+        </h3>
+        <span class="entry-meta">${metaLine(item, id)}</span>
       </span>
       <span class="entry-sources">${(item.sourceIds ?? [])
-        .map((id) => escapeHtml(SOURCE_LABELS[id] ?? id))
-        .join(' · ')}</span>
-    </button>
-    ${isOpen ? `<div class="detail">${detailHtml(item)}</div>` : ''}
+        .map((sid) => escapeHtml(SOURCE_LABELS[sid] ?? sid))
+        .join(' \u00b7 ')}</span>
+    </div>
+    ${isOpen ? `<div class="detail">${detailHtml(item, id)}</div>` : ''}
   </li>`;
 }
 
@@ -569,6 +629,14 @@ dom.stackChips.addEventListener('click', (event) => {
   apply();
 });
 
+dom.stackCounts.addEventListener('click', (event) => {
+  if (!event.target.closest('[data-stack-exploited]')) return;
+  state.exploited = true;
+  if (!state.stack.size) state.stackOnly = true;
+  syncControls();
+  apply();
+});
+
 dom.stackOnly.addEventListener('change', () => {
   state.stackOnly = dom.stackOnly.checked;
   if (state.stackOnly) state.stack.clear();
@@ -588,23 +656,74 @@ dom.stats.addEventListener('click', (event) => {
   apply();
 });
 
+/**
+ * navigator.clipboard needs a secure context, which a plain-HTTP deployment is
+ * not, so fall back to the old selection trick rather than silently failing.
+ */
+async function copyText(value) {
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    try {
+      const scratch = document.createElement('textarea');
+      scratch.value = value;
+      scratch.setAttribute('readonly', '');
+      scratch.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+      document.body.appendChild(scratch);
+      scratch.select();
+      const ok = document.execCommand('copy');
+      scratch.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+}
+
+document.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-copy]');
+  if (!button) return;
+  // Copying must never also toggle the row it sits in.
+  event.preventDefault();
+  event.stopPropagation();
+
+  const ok = await copyText(button.dataset.copy);
+  button.dataset.copied = ok ? 'yes' : 'failed';
+  clearTimeout(button._copyTimer);
+  button._copyTimer = setTimeout(() => delete button.dataset.copied, 1400);
+});
+
 dom.feed.addEventListener('click', (event) => {
   const head = event.target.closest('.entry-head');
   if (!head) return;
+
+  // A copy control is handled on its own; stopPropagation cannot be relied on
+  // for it, because this listener sits closer to the button than that one does
+  // and therefore runs first.
+  if (event.target.closest('[data-copy]')) return;
+  // Finishing a text selection inside the row should leave the row alone -
+  // people drag across the ID and the vendor to copy them.
+  if (window.getSelection()?.toString()) return;
+  // Links in the meta line are their own business.
+  if (event.target.closest('a')) return;
+
   const card = head.closest('.entry');
   const key = card.dataset.key;
   const item = lastPayload?.items.find((candidate) => candidate.key === key);
   if (!item) return;
 
+  const toggle = head.querySelector('.entry-toggle');
+
   if (expanded.has(key)) {
     expanded.delete(key);
     card.dataset.open = 'false';
-    head.setAttribute('aria-expanded', 'false');
+    toggle?.setAttribute('aria-expanded', 'false');
     card.querySelector('.detail')?.remove();
   } else {
     expanded.add(key);
     card.dataset.open = 'true';
-    head.setAttribute('aria-expanded', 'true');
+    toggle?.setAttribute('aria-expanded', 'true');
     const detail = document.createElement('div');
     detail.className = 'detail';
     detail.innerHTML = detailHtml(item);
