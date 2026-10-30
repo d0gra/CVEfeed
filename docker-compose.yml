@@ -1,0 +1,17 @@
+services:
+  cvefeed:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      # Optional, but recommended - raises upstream rate limits.
+      NVD_API_KEY: "${NVD_API_KEY:-}"
+      GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
+    volumes:
+      # Persist the JSON snapshot across restarts.
+      - cache:/app/.cache
+
+volumes:
+  cache:

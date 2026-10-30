@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CVE Feed — Live Vulnerability Dashboard</title>
+<meta name="description" content="Live vulnerability dashboard aggregating NVD, CISA KEV, CISA advisories, GitHub Security Advisories and the EU Vulnerability Database.">
+<meta name="color-scheme" content="dark light">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+<link rel="stylesheet" href="/assets/styles.css?v=__ASSET_VERSION__">
+</head>
+<body>
+<a class="skip" href="#results">Skip to results</a>
+
+<header class="topbar">
+  <div class="topbar-main">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">🛡️</span>
+      <div>
+        <h1>CVE Feed</h1>
+        <p class="brand-sub">Live vulnerability intelligence from trusted public sources</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <div class="freshness" id="freshness" aria-live="polite">
+        <span class="dot" id="status-dot"></span>
+        <span id="freshness-text">Loading feed…</span>
+      </div>
+      <button type="button" id="refresh" class="btn" title="Reload from the server cache">
+        <span aria-hidden="true">↻</span> Refresh
+      </button>
+      <button type="button" id="theme-toggle" class="btn btn-icon" title="Toggle light / dark" aria-label="Toggle colour theme">◐</button>
+    </div>
+  </div>
+  <div class="sources" id="sources" aria-label="Source health"></div>
+</header>
+
+<main>
+  <section class="stats" id="stats" aria-label="Summary statistics"></section>
+
+  <section class="controls" aria-label="Filters">
+    <div class="control-row">
+      <div class="search-wrap">
+        <span class="search-icon" aria-hidden="true">⌕</span>
+        <input type="search" id="q" placeholder="Search CVE, vendor, product, CWE, keyword…  (press / )" autocomplete="off" aria-label="Search vulnerabilities">
+        <button type="button" class="clear-q" id="clear-q" aria-label="Clear search" hidden>×</button>
+      </div>
+      <select id="sort" aria-label="Sort order">
+        <option value="priority">Sort: Triage priority</option>
+        <option value="newest">Sort: Newest published</option>
+        <option value="updated">Sort: Recently updated</option>
+        <option value="score">Sort: CVSS score</option>
+        <option value="epss">Sort: EPSS likelihood</option>
+        <option value="severity">Sort: Severity</option>
+      </select>
+      <select id="days" aria-label="Time window">
+        <option value="0">Any date</option>
+        <option value="1">Last 24 hours</option>
+        <option value="3">Last 3 days</option>
+        <option value="7">Last 7 days</option>
+        <option value="30">Last 30 days</option>
+      </select>
+    </div>
+
+    <div class="control-row control-row-wrap">
+      <div class="chipset" id="severity-chips" role="group" aria-label="Filter by severity"></div>
+      <label class="switch">
+        <input type="checkbox" id="exploited">
+        <span>Actively exploited only</span>
+      </label>
+      <div class="chipset" id="source-chips" role="group" aria-label="Filter by source"></div>
+      <button type="button" class="btn btn-ghost" id="reset">Reset filters</button>
+    </div>
+  </section>
+
+  <section id="results" aria-live="polite" aria-busy="true">
+    <div class="results-head">
+      <h2 id="results-count">Loading…</h2>
+      <p class="results-note" id="results-note"></p>
+    </div>
+    <ol class="feed" id="feed"></ol>
+    <div class="empty" id="empty" hidden>
+      <p class="empty-title">No vulnerabilities match these filters</p>
+      <p>Try widening the time window or clearing the search.</p>
+    </div>
+    <div class="skeletons" id="skeletons"></div>
+    <nav class="pager" id="pager" aria-label="Pagination" hidden></nav>
+  </section>
+</main>
+
+<footer class="foot">
+  <p>
+    Aggregated from
+    <a href="https://nvd.nist.gov/" rel="noopener noreferrer" target="_blank">NVD</a>,
+    <a href="https://www.cisa.gov/known-exploited-vulnerabilities-catalog" rel="noopener noreferrer" target="_blank">CISA KEV</a>,
+    <a href="https://www.cisa.gov/news-events/cybersecurity-advisories" rel="noopener noreferrer" target="_blank">CISA Advisories</a>,
+    <a href="https://github.com/advisories" rel="noopener noreferrer" target="_blank">GitHub Security Advisories</a>
+    and <a href="https://euvd.enisa.europa.eu/" rel="noopener noreferrer" target="_blank">EUVD (ENISA)</a>.
+  </p>
+  <p class="foot-dim">Data is served from a short-lived server cache. Always confirm against the upstream advisory before acting.</p>
+</footer>
+
+<script src="/assets/app.js?v=__ASSET_VERSION__" type="module"></script>
+</body>
+</html>

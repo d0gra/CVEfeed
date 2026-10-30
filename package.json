@@ -1,0 +1,32 @@
+{
+  "name": "cvefeed",
+  "version": "1.0.0",
+  "description": "Live CVE / vulnerability dashboard aggregating trusted public feeds. No database required.",
+  "main": "app.js",
+  "type": "module",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "start": "node app.js",
+    "dev": "node --watch app.js",
+    "warm": "node scripts/warm-cache.js"
+  },
+  "keywords": [
+    "cve",
+    "vulnerability",
+    "nvd",
+    "cisa",
+    "kev",
+    "security",
+    "dashboard"
+  ],
+  "license": "MIT",
+  "private": true,
+  "dependencies": {
+    "compression": "^1.7.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "fast-xml-parser": "^4.5.1"
+  }
+}
