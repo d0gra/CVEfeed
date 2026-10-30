@@ -44,6 +44,16 @@ export const config = {
   // feed is more useful on time than complete.
   exploitBudgetMs: clamp(int(process.env.EXPLOIT_BUDGET_SECONDS, 25), 1, 300) * 1000,
   vulncheckToken: process.env.VULNCHECK_TOKEN || '',
+  // Per-entity cache entries - one per CVE looked up - are capped, because
+  // /cve/:id answers for any published CVE and nothing stops a crawler from
+  // walking all 300,000 of them.
+  cacheMaxEntries: clamp(int(process.env.CACHE_MAX_ENTRIES, 500), 20, 50_000),
+  // Mongo holds what the host should not: entries read one at a time rather
+  // than scanned. Unset means the app keeps everything in memory, as before.
+  mongoUri: process.env.MONGODB_URI || '',
+  mongoDb: process.env.MONGODB_DB || 'cvefeed',
+  mongoPoolSize: clamp(int(process.env.MONGODB_POOL_SIZE, 5), 1, 50),
+  mongoTimeoutMs: clamp(int(process.env.MONGODB_TIMEOUT_SECONDS, 10), 2, 60) * 1000,
   diskCache: bool(process.env.DISK_CACHE, true),
   diskCacheDir: path.resolve(process.cwd(), process.env.DISK_CACHE_DIR || '.cache'),
   // Canonical origin for links search engines and agents must agree on. Falls

@@ -11,6 +11,7 @@ import { SEVERITY_ORDER } from './lib/severity.js';
 import { isCveId, lookupCve } from './lookup.js';
 import { STACK_CATEGORY_IDS } from './stack.js';
 import { attachSignals, MATURITY, pocLinksFor } from './exploits.js';
+import { aggregateStats, findRecordById, queryRecords } from './store/cveStore.js';
 
 const asList = (value) =>
   String(value ?? '')
@@ -171,6 +172,11 @@ const feedMeta = (feed) => ({
  */
 export async function queryFeed(query = {}) {
   const feed = await getFeed();
+
+  // The database answers filtering, sorting, paging and counting. Nothing but
+  // this page of records reaches the host.
+  if (feed.value.stored) return queryFromStore(feed, query);
+
   const filtered = applyFilters(feed.value.items, query);
 
   const sortKey = String(query.sort ?? 'priority');
@@ -220,9 +226,61 @@ export async function queryFeed(query = {}) {
 
 const pocRepos = (item) => (item?.exploitation?.publicPoc ? pocLinksFor(item.cveId) : Promise.resolve([]));
 
+/** The same shape queryFeed has always returned, assembled by the database. */
+async function queryFromStore(feed, query) {
+  const [page, stats] = await Promise.all([queryRecords(query), aggregateStats(query)]);
+
+  if (!page) {
+    // The database went away mid-flight. Say so rather than reporting an
+    // empty feed, which would read as "nothing is wrong and nothing exists".
+    throw new Error('The vulnerability store is unavailable.');
+  }
+
+  let lookup = null;
+  const items = [...page.items];
+  const term = String(query.q ?? '').trim();
+
+  if (items.length === 0 && isCveId(term)) {
+    try {
+      const found = await lookupCve(term);
+      if (found.value.item) {
+        lookup = { sources: found.value.sources, lookedUpAt: found.value.lookedUpAt };
+        await attachSignals([found.value.item]);
+        items.push(found.value.item);
+      }
+    } catch (error) {
+      lookup = { error: error.message };
+    }
+  }
+
+  return {
+    meta: {
+      ...feedMeta(feed),
+      sort: page.sort,
+      total: lookup ? items.length : page.total,
+      totalUnfiltered: feed.value.fetched ?? stats.total,
+      page: page.page,
+      limit: page.limit,
+      pages: Math.max(Math.ceil((lookup ? items.length : page.total) / page.limit), 1),
+      ...(lookup ? { lookup } : {}),
+    },
+    stats,
+    sources: feed.value.sources,
+    exploitSources: feed.value.exploitSources ?? [],
+    items,
+  };
+}
+
 /** One record by any of its identifiers, with the same lookup fallback. */
 export async function findRecord(id) {
   const feed = await getFeed();
+
+  if (feed.value.stored) {
+    const stored = await findRecordById(id);
+    if (stored) return { item: stored, meta: feedMeta(feed), pocRepos: await pocRepos(stored) };
+    return lookupFallback(id, feed);
+  }
+
   const needle = String(id).toLowerCase();
   const item = feed.value.items.find(
     (candidate) =>
@@ -237,6 +295,11 @@ export async function findRecord(id) {
   // into the repositories themselves; the feed listing is not.
   if (item) return { item, meta: feedMeta(feed), pocRepos: await pocRepos(item) };
 
+  return lookupFallback(id, feed);
+}
+
+/** Anything the store has never seen is asked of the registers directly. */
+async function lookupFallback(id, feed) {
   if (isCveId(id)) {
     const found = await lookupCve(id);
     if (found.value.item) {

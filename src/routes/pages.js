@@ -11,6 +11,7 @@ import { getFeed } from '../aggregate.js';
 import { findRecord, queryFeed } from '../query.js';
 import { isCveId } from '../lookup.js';
 import { STACK_CATEGORIES } from '../stack.js';
+import { listIdsForSitemap } from '../store/cveStore.js';
 import { originFor } from '../pages/layout.js';
 import { cvePage, notFoundPage } from '../pages/cve.js';
 import { agentsPage, exploitedPage, stackCategoryPage, stackIndexPage } from '../pages/index.js';
@@ -185,7 +186,11 @@ router.get('/sitemap.xml', async (req, res, next) => {
     // exist, not every CVE ever issued. Two records can still resolve to the
     // same page, so the set is deduplicated rather than merely sorted.
     const seen = new Set(urls.map((u) => u.loc));
-    for (const item of [...feed.value.items].sort(byNewest).slice(0, 5000)) {
+    const records = feed.value.stored
+      ? await listIdsForSitemap(5000)
+      : [...feed.value.items].sort(byNewest).slice(0, 5000);
+
+    for (const item of records) {
       const id = item.cveId ?? item.ghsaId ?? item.advisoryId ?? item.id;
       if (!id) continue;
       const loc = `${origin}/cve/${encodeURIComponent(String(id).toUpperCase())}`;

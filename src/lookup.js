@@ -49,7 +49,7 @@ async function collectOne(cveId) {
 
 export function lookupCve(cveId) {
   const normalized = String(cveId).toUpperCase();
-  return cached(`lookup-${normalized}`, () => collectOne(normalized), { ttlMs: LOOKUP_TTL_MS });
+  return cached(`lookup-${normalized}`, () => collectOne(normalized), { ttlMs: LOOKUP_TTL_MS, evictable: true });
 }
 
 export default { lookupCve, isCveId };

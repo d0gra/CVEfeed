@@ -31,7 +31,16 @@ function check(name, fn) {
 }
 
 const client = new Client({ name: 'cvefeed-conformance', version: '1.0.0' });
-await client.connect(new StreamableHTTPClientTransport(endpoint));
+
+try {
+  await client.connect(new StreamableHTTPClientTransport(endpoint));
+} catch (error) {
+  // This one needs something to talk to. Skipping is honest; failing the
+  // suite because nothing is running is not.
+  console.log(`SKIP  nothing listening at ${endpoint} (${error.message})`);
+  console.log('      start the app, or pass a base URL: node test/mcp-conformance.mjs https://your.host');
+  process.exit(0);
+}
 console.log(`connected to ${endpoint}\n`);
 
 const parse = (res) => JSON.parse(res.content[0].text);

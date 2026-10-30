@@ -1,0 +1,144 @@
+/**
+ * The Atlas-backed store.
+ *
+ * Runs against a throwaway database, dropped at the end, so it can never
+ * disturb real records. Skips entirely without MONGODB_URI, so a checkout
+ * with no cluster still has a green suite.
+ *
+ *   node test/store.mjs
+ */
+process.env.MONGODB_DB = `cvefeed_test_${Date.now()}`;
+
+import assert from 'node:assert/strict';
+
+if (!process.env.MONGODB_URI) {
+  const dotenv = await import('dotenv');
+  dotenv.config();
+}
+
+if (!process.env.MONGODB_URI) {
+  console.log('SKIP  no MONGODB_URI, nothing to test against');
+  process.exit(0);
+}
+
+const store = await import('../src/store/cveStore.js');
+const signals = await import('../src/store/exploitStore.js');
+const { getDb, closeMongo } = await import('../src/lib/mongo.js');
+
+let pass = 0;
+let fail = 0;
+const check = (name, cond, extra = '') => {
+  cond ? pass++ : fail++;
+  console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${extra ? '  ' + extra : ''}`);
+};
+
+const record = (over = {}) => ({
+  key: `cve:${over.cveId}`,
+  id: over.cveId,
+  cveId: over.cveId,
+  kind: 'cve',
+  title: over.title ?? 'A test vulnerability in the widget parser',
+  description: 'Remote code execution via a crafted widget.',
+  severity: 'high',
+  severityRank: 3,
+  score: 8.8,
+  epss: 1.2,
+  published: '2026-10-01T00:00:00.000Z',
+  modified: '2026-10-02T00:00:00.000Z',
+  exploited: false,
+  sourceIds: ['nvd'],
+  vendor: 'Acme',
+  product: 'widget',
+  cwes: ['CWE-94'],
+  tags: [],
+  references: [],
+  relatedCves: [],
+  sources: [{ id: 'nvd', name: 'NVD' }],
+  stack: null,
+  ...over,
+});
+
+try {
+  check('the store reports itself ready', await store.storeReady());
+
+  // --- writing ---
+  const docs = [
+    record({ cveId: 'CVE-2026-0001' }),
+    record({ cveId: 'CVE-2026-0002', severity: 'critical', severityRank: 4, score: 9.8, exploited: true }),
+    record({
+      cveId: 'CVE-2026-0003',
+      title: 'vLLM inference server flaw',
+      stack: { categories: ['inference'], categoryNames: ['Inference & serving'], subjects: ['vLLM'], labels: ['vLLM'] },
+      exploitation: { maturity: 'proof-of-concept', maturityRank: 3, publicPoc: true, evidence: ['Public PoC'] },
+    }),
+  ];
+  const written = await store.upsertRecords(docs);
+  check('records are written', written.ok && written.written === 3, `${written.written} written`);
+
+  // --- reading back ---
+  const all = await store.queryRecords({ limit: 50 });
+  check('all records come back', all.total === 3, `total=${all.total}`);
+  check('  ...with the internal key stripped', all.items.every((i) => i._id === undefined));
+
+  const crit = await store.queryRecords({ severity: 'critical', limit: 50 });
+  check('severity filters', crit.total === 1 && crit.items[0].cveId === 'CVE-2026-0002');
+
+  const exploited = await store.queryRecords({ exploited: '1', limit: 50 });
+  check('exploited filters', exploited.total === 1);
+
+  const stack = await store.queryRecords({ stack: 'inference', limit: 50 });
+  check('the AI-stack facet filters', stack.total === 1 && stack.items[0].cveId === 'CVE-2026-0003');
+
+  const poc = await store.queryRecords({ exploit: 'poc', limit: 50 });
+  check('exploit signals filter', poc.total === 1);
+
+  const bogus = await store.queryRecords({ exploit: 'nonsense', limit: 50 });
+  check('an unknown signal matches nothing, not everything', bogus.total === 0, `total=${bogus.total}`);
+
+  const sorted = await store.queryRecords({ sort: 'score', limit: 50 });
+  check('sorting is applied', sorted.items[0].cveId === 'CVE-2026-0002', `first=${sorted.items[0].cveId}`);
+
+  const paged = await store.queryRecords({ limit: 2, page: 2 });
+  check('paging works', paged.items.length === 1 && paged.total === 3);
+
+  const text = await store.queryRecords({ q: 'vLLM', limit: 50 });
+  check('free text finds a record', text.total === 1 && text.items[0].cveId === 'CVE-2026-0003', `total=${text.total}`);
+
+  const byId = await store.queryRecords({ q: 'CVE-2026-0002', limit: 50 });
+  check('an identifier matches exactly', byId.total === 1);
+
+  // --- stats ---
+  const stats = await store.aggregateStats({});
+  check('counts are aggregated, not scanned', stats.total === 3, `total=${stats.total}`);
+  check('  ...by severity', stats.bySeverity.critical === 1 && stats.bySeverity.high === 2);
+  check('  ...by AI-stack category', stats.byStack.inference === 1 && stats.inStack === 1);
+  check('  ...and exploit signals', stats.withExploitSignal === 1 && stats.byExploit.publicPoc === 1);
+  check('  ...with a mean score', stats.averageScore > 8 && stats.averageScore < 10, `${stats.averageScore}`);
+
+  // --- single record ---
+  const one = await store.findRecordById('cve-2026-0001');
+  check('a record is found case-insensitively', one?.cveId === 'CVE-2026-0001');
+  check('a missing record is null, not an error', (await store.findRecordById('CVE-1999-99999')) === null);
+
+  // --- upsert is idempotent and preserves first sight ---
+  const first = (await store.findRecordById('CVE-2026-0001')).firstSeen;
+  await store.upsertRecords([record({ cveId: 'CVE-2026-0001', title: 'Renamed' })]);
+  const again = await store.findRecordById('CVE-2026-0001');
+  check('re-running a refresh updates in place', again.title === 'Renamed' && (await store.aggregateStats({})).total === 3);
+  check('  ...and keeps when it was first seen', String(again.firstSeen) === String(first));
+
+  // --- exploit signals round trip ---
+  await signals.putSource('metasploit', {
+    'CVE-2026-0003': [{ url: 'https://example.com/module', label: 'exploit/test/module' }],
+  });
+  const got = await signals.getSignals(['CVE-2026-0003', 'CVE-2026-0001']);
+  check('signals store and come back by id', got.get('CVE-2026-0003')?.metasploit?.[0]?.url === 'https://example.com/module');
+  check('  ...and an id with none is simply absent', !got.has('CVE-2026-0001'));
+} finally {
+  const db = await getDb();
+  await db?.dropDatabase().catch(() => {});
+  await closeMongo();
+}
+
+console.log(`\n${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

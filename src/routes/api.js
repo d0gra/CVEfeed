@@ -2,6 +2,7 @@ import { Router } from 'express';
 import config from '../config.js';
 import { getFeed } from '../aggregate.js';
 import { feedMeta, findRecord, queryFeed, summarize } from '../query.js';
+import { aggregateStats } from '../store/cveStore.js';
 import { enabledSources } from '../sources/index.js';
 import { stackFacets } from '../stack.js';
 import { EXPLOIT_SOURCE_META, getExploitIndex } from '../exploits.js';
@@ -21,7 +22,7 @@ router.get('/stats', async (_req, res, next) => {
     const feed = await getFeed();
     res.json({
       meta: feedMeta(feed),
-      stats: summarize(feed.value.items),
+      stats: feed.value.stored ? await aggregateStats({}) : summarize(feed.value.items),
       sources: feed.value.sources,
     });
   } catch (error) {

@@ -3,6 +3,8 @@ import { cached, peek } from './lib/cache.js';
 import { finalize, mergeAll } from './merge.js';
 import { enabledSources } from './sources/index.js';
 import { attachSignals } from './exploits.js';
+import { mongoConfigured } from './lib/mongo.js';
+import { upsertRecords } from './store/cveStore.js';
 
 const FEED_KEY = 'feed-merged';
 
@@ -78,15 +80,24 @@ async function collect() {
   // indefinitely. A failure leaves records unsignalled, not wrong.
   const exploitHealth = await attachSignals(items);
 
-  items.sort(comparators.priority);
-
-  return {
-    items,
+  const meta = {
     sources: results.map((r) => r.health),
     exploitSources: exploitHealth,
     generatedAt: new Date().toISOString(),
     window: { nvdDays: config.nvdDays },
   };
+
+  // With a database, a refresh writes and keeps nothing: the cached value is
+  // metadata, and the records are queried per request rather than held. The
+  // collection also accumulates, so a CVE that falls out of the fetch window
+  // keeps its page instead of disappearing.
+  if (mongoConfigured()) {
+    const written = await upsertRecords(items);
+    return { ...meta, items: null, stored: true, fetched: items.length, written: written.written };
+  }
+
+  items.sort(comparators.priority);
+  return { ...meta, items };
 }
 
 /** Observed beats weaponized beats a public exploit beats a PoC. */

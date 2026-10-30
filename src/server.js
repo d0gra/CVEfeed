@@ -186,7 +186,10 @@ export function start() {
     (feed) => {
       const ok = feed.value.sources.filter((s) => s.ok).length;
       console.log(
-        `[cvefeed] warm cache ready: ${feed.value.items.length} records from ${ok}/${feed.value.sources.length} sources`,
+        feed.value.stored
+          ? `[cvefeed] store ready: ${feed.fromCache ? 'using the existing refresh' : `wrote ${feed.value.written} records`}` +
+            ` from ${ok}/${feed.value.sources.length} sources`
+          : `[cvefeed] warm cache ready: ${feed.value.items.length} records from ${ok}/${feed.value.sources.length} sources`,
       );
     },
     (error) => console.error('[cvefeed] initial fetch failed:', error.message),

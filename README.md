@@ -1,9 +1,9 @@
 # CVE Feed
 
 A live vulnerability dashboard that aggregates CVE data from five trusted public
-sources. **No database, no build step, no API keys required** — it fetches
-directly from the upstream feeds and keeps a short-lived cache in memory plus a
-small JSON snapshot on disk.
+sources. **No build step, no API keys required.** It runs with no database at
+all, holding the feed in memory with a JSON snapshot on disk — or, pointed at a
+MongoDB instance, [keeps almost nothing on the host](#storage).
 
 Vulnerabilities in the AI and agent stack - inference servers, agent
 frameworks, MCP servers, vector stores - get [a facet of their own](#the-ai-stack),
@@ -64,6 +64,58 @@ remediation deadline come back for any CVE at no extra request.
 
 Full-text search across every CVE ever published is deliberately *not*
 supported: that needs an index, which means the database this app avoids.
+
+## Storage
+
+The app runs two ways, and the difference is where the data sits.
+
+**Without `MONGODB_URI`** everything is in the process: the feed is an array,
+the exploit index is an object, and requests filter and count by scanning them.
+Simple, no infrastructure, and the footprint grows with the data.
+
+**With `MONGODB_URI`** the records and the exploit signals live in the
+database, which does the filtering, sorting, paging and counting. The host
+keeps a page of results and nothing else.
+
+| | In memory | On MongoDB |
+| --- | --- | --- |
+| Resident memory, at rest | 82 MB | **50 MB** |
+| Disk | 11.8 MB | **8 KB** |
+| Data held on the host | 22.9 MB | ~0 |
+| Grows as records accumulate | yes | no |
+
+The memory saving is smaller than it looks and worth being precise about: the
+driver and its TLS cost roughly 20 MB, which almost cancels the 23 MB of data
+it removes. Pool size and compression make no difference — 1 socket or 5, zlib
+or none, it measures the same. **The real win is that nothing scales with the
+data**, and that a database makes the feed stop forgetting: records accumulate
+instead of ageing out of a seven-day window, so a CVE keeps its page after it
+drops out of the fetch.
+
+### Keep refreshes out of the web process
+
+Fetching and merging peaks far above anything serving costs — around 120 MB for
+the feed and 270 MB while parsing the exploit catalogues. Running that inside
+the web process sizes the process for its worst minute. Set
+`REFRESH_INTERVAL_MINUTES=0` and let cron own it:
+
+```bash
+*/20 * * * * cd /path/to/cvefeed && npm run refresh      # the feed
+17 */12 * * * cd /path/to/cvefeed && npm run refresh:all # and exploit signals
+```
+
+That at-rest 50 MB assumes this. With in-process refreshing it is roughly 120 MB.
+
+### What goes where
+
+| Collection | Holds | Written by |
+| --- | --- | --- |
+| `cves` | One document per merged record, with `firstSeen` and `lastSeen` | each refresh |
+| `exploit_signals` | One per CVE that has any, with links, expiring after 60 days | the exploit refresh |
+
+Free-text search uses a MongoDB text index, which matches words rather than
+substrings — a deliberate difference from the in-memory scan, which could not
+survive a growing collection.
 
 ## Exploit availability
 
@@ -211,16 +263,25 @@ Everything is optional. See [`.env.example`](.env.example) for the full list.
 | `KEV_DAYS` | `90` | Drop KEV-only entries older than this; `0` keeps the full catalog. |
 | `NVD_API_KEY` | — | [Free key](https://nvd.nist.gov/developers/request-an-api-key); raises the limit from 5 to 50 req/30s. |
 | `GITHUB_TOKEN` | — | Raises the advisories limit to 5000 req/hour. |
+| `MONGODB_URI` | — | Move records and exploit signals off the host. Unset keeps everything in memory. |
+| `MONGODB_DB` | `cvefeed` | Database name. |
+| `MONGODB_POOL_SIZE` | `5` | The driver defaults to 100 sockets. |
+| `CACHE_MAX_ENTRIES` | `500` | Cap on per-CVE cache entries, in memory and on disk. |
 | `DISK_CACHE` | `true` | Keep a JSON snapshot in `.cache/` so restarts are instant. |
 | `REFRESH_TOKEN` | — | Enables `POST /api/refresh`. Unset = endpoint disabled. |
 
-### Why no database?
+### Why a database is optional
 
 Every record is derived from an upstream feed, so the feeds *are* the source of
-truth. The app holds the merged result in memory and mirrors it to a single JSON
-file. That means no migrations, no credentials, and nothing to provision — and
-if an upstream feed goes down, the last good snapshot keeps serving with a
-visible "stale" banner.
+truth and nothing stored here is irreplaceable. That is why the app runs with
+no database at all: drop the cache, or drop the collections, and the next
+refresh rebuilds them. No migrations, nothing to back up.
+
+A database earns its place for two reasons rather than durability. It keeps the
+data off a host you are paying for by the megabyte, and it lets the feed
+accumulate instead of forgetting whatever aged out of the fetch window. If
+neither matters to you, leave `MONGODB_URI` unset and the app behaves exactly
+as it always did.
 
 ## API
 
