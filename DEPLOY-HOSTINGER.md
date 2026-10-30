@@ -29,10 +29,12 @@ In hPanel go to **Advanced → Node.js** and click **Create application**:
 | Application mode | **Production** |
 | Application root | the folder you deployed into, e.g. `cvefeed` |
 | Application URL | your domain or subdomain |
-| **Application startup file** | **`app.js`** |
+| **Application startup file** | **`app.js`** (or `server.js` — both work) |
 
-`app.js` sits at the project root precisely because Passenger looks for it
-there by default.
+`app.js` sits at the project root because Passenger looks for it there by
+default; `server.js` beside it is the same entry under the name most platform
+presets expect, including Hostinger's own Express preset. Whichever a host
+reaches for, it starts.
 
 ### 3. Install dependencies
 
@@ -68,9 +70,14 @@ or left blank:
 | `GITHUB_TOKEN` | a read-only PAT | Raises the advisories limit to 5000/hour, and is what makes the public-PoC signal dependable: unauthenticated GitHub allows 60 requests an hour **per IP**, shared with every other site on a shared host. |
 | `NVD_API_KEY` | a [free key](https://nvd.nist.gov/developers/request-an-api-key) | Raises NVD from 5 to 50 requests / 30s, which matters on a shared IP. |
 
-Set **Build command** to nothing — there is no build step — and the **start
-command** to `npm start`. Install with `npm ci --omit=dev`, which keeps the
-MCP SDK (a test-only dependency) out of the deployment.
+Set **Build command** to nothing — there is no build step. The entry file can
+be `app.js` or `server.js`; both exist and do the same thing.
+
+If the install command is editable, use `npm ci --omit=dev`. The default
+`npm install` pulls devDependencies too, which means the MCP SDK — used only
+by the conformance test — ships to production: 139 packages instead of 79.
+It does no harm beyond the weight, so it is worth changing but not worth
+blocking on.
 
 ### A note on the Node version
 
