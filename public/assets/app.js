@@ -61,6 +61,7 @@ const state = {
 
 let lastPayload = null;
 let inFlight = null;
+let revalidateTimer = null;
 const expanded = new Set();
 
 /* ---------- utilities ---------- */
@@ -332,7 +333,12 @@ function renderBanner(meta) {
     notes.push({ kind: 'error', text: `Direct lookup failed: ${meta.lookup.error}` });
   }
 
-  if (meta?.stale) {
+  if (meta?.revalidating) {
+    notes.push({
+      kind: 'warn',
+      text: `Showing the snapshot from ${relativeTime(meta.generatedAt)} while a refresh runs in the background.`,
+    });
+  } else if (meta?.stale) {
     notes.push({ kind: 'error', text: 'Showing the last good snapshot — refreshing from upstream failed.' });
   }
 
@@ -376,8 +382,17 @@ function renderFeed(payload) {
   renderPager(meta);
   dom.results.setAttribute('aria-busy', 'false');
 
-  dom.statusDot.dataset.state = meta.stale ? 'stale' : 'ok';
+  dom.statusDot.dataset.state = meta.revalidating ? 'refreshing' : meta.stale ? 'stale' : 'ok';
   dom.freshnessText.textContent = `Updated ${relativeTime(meta.generatedAt)}`;
+
+  // A background refresh lands in well under a minute, so check back rather
+  // than leaving the visitor on the old snapshot until the next poll.
+  clearTimeout(revalidateTimer);
+  if (meta.revalidating) {
+    revalidateTimer = setTimeout(() => {
+      if (document.visibilityState === 'visible' && !inFlight) load();
+    }, 20_000);
+  }
 }
 
 /* ---------- data ---------- */

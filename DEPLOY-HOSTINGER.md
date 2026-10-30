@@ -56,6 +56,7 @@ All are optional.
 | `GITHUB_TOKEN` | Any read-only PAT raises the GitHub advisories limit to 5000 req/hour. |
 | `NVD_MAX_PAGES` | Raise to `4`–`6` for a deeper feed if your plan has the CPU budget. |
 | `CACHE_TTL_MINUTES` | Increase to `60` to be gentler on upstream feeds and your CPU quota. |
+| `STALE_WHILE_REVALIDATE_MINUTES` | Default `360`. How long an idle app may answer from its last snapshot while refreshing behind the request, so the first visitor back never waits. |
 
 Do **not** set `PORT` — Hostinger assigns it, and the app reads it
 automatically.

@@ -20,6 +20,11 @@ export const config = {
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean),
   cacheTtlMs: clamp(int(process.env.CACHE_TTL_MINUTES, 20), 1, 1440) * 60_000,
+  // How far past the TTL a snapshot may still be served instantly while a
+  // refresh runs behind it. This is what spares the first visitor after an
+  // idle period the full upstream round trip. 0 disables it and goes back to
+  // blocking on every expiry.
+  staleWhileRevalidateMs: clamp(int(process.env.STALE_WHILE_REVALIDATE_MINUTES, 360), 0, 10080) * 60_000,
   refreshIntervalMs: clamp(int(process.env.REFRESH_INTERVAL_MINUTES, 20), 0, 1440) * 60_000,
   nvdDays: clamp(int(process.env.NVD_DAYS, 7), 1, 120),
   nvdMaxPages: clamp(int(process.env.NVD_MAX_PAGES, 2), 1, 10),

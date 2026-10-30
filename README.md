@@ -79,6 +79,7 @@ Everything is optional. See [`.env.example`](.env.example) for the full list.
 | `PORT` | `3000` | Listen port. Hostinger sets this for you. |
 | `SOURCES` | all five | Comma-separated subset, e.g. `nvd,kev`. |
 | `CACHE_TTL_MINUTES` | `20` | How long a fetch is reused. |
+| `STALE_WHILE_REVALIDATE_MINUTES` | `360` | How far past the TTL a snapshot is still served instantly while it refreshes behind the request; `0` blocks on every expiry instead. |
 | `REFRESH_INTERVAL_MINUTES` | `20` | Background refresh cadence; `0` disables it. |
 | `NVD_DAYS` | `7` | Publication window pulled from NVD (1–120). |
 | `NVD_MAX_PAGES` | `2` | 500 CVEs per page. Raise for a deeper feed. |
@@ -107,7 +108,7 @@ All endpoints return JSON.
 | `GET /api/sources` | Configured sources and their metadata |
 | `GET /api/cve/:id` | One record by CVE, GHSA, EUVD or advisory ID, falling back to a direct source lookup |
 | `POST /api/refresh` | Force a refetch (requires `REFRESH_TOKEN`) |
-| `GET /healthz` | Liveness and cache age |
+| `GET /healthz` | Liveness, cache age, and the TTL/grace thresholds that give that age its meaning |
 
 `GET /api/feed` accepts `q`, `severity` (`critical,high,medium,low,none`),
 `source`, `kind` (`cve` / `advisory`), `exploited=1`, `minScore`, `days`,
@@ -130,15 +131,28 @@ Nothing else to configure.
 
 ## Updating a deployment
 
-The **data** looks after itself: a background timer refreshes every
-`REFRESH_INTERVAL_MINUTES`, and any request arriving after the TTL has expired
-triggers a refetch. Stale data is only ever served when upstream is failing, and
-it is flagged when that happens.
+The **data** looks after itself. A background timer refreshes every
+`REFRESH_INTERVAL_MINUTES`. A request that arrives once the TTL has expired is
+answered from the last snapshot straight away, in milliseconds, and the refetch
+runs behind it — so nobody waits on upstream. The page notices, says which
+snapshot it is showing, and picks up the new data on its own a few seconds
+later.
 
-On shared hosting the app is suspended when idle, which stops the timer. The
-feed still refreshes on the next visit, but that visitor waits for the fetch
-(~25s cold). The cron entry in [DEPLOY-HOSTINGER.md](DEPLOY-HOSTINGER.md) running
-`npm run warm` every 20 minutes keeps the cache inside its TTL so nobody does.
+That only holds while the snapshot is worth showing. Past
+`CACHE_TTL_MINUTES + STALE_WHILE_REVALIDATE_MINUTES` — six hours and twenty
+minutes by default — the request blocks and waits for a real fetch rather than
+quietly serving day-old vulnerability data. Set
+`STALE_WHILE_REVALIDATE_MINUTES=0` to always block on expiry.
+
+This matters most on shared hosting, where the app is suspended when idle and
+the timer stops with it. The first visitor back still gets an instant page from
+the snapshot on disk; the fetch they trigger (~25s cold) happens out of their
+way. The cron entry in [DEPLOY-HOSTINGER.md](DEPLOY-HOSTINGER.md) running
+`npm run warm` every 20 minutes keeps the data inside its TTL on top of that, so
+the snapshot being served is never more than a few minutes behind.
+
+Stale data is always flagged: an amber banner while a refresh is in flight, and
+a different one naming the failure if upstream could not be reached at all.
 
 The **code** needs a restart to take effect:
 

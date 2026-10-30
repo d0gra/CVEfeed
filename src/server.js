@@ -73,6 +73,11 @@ export function createApp() {
       uptimeSeconds: Math.round(process.uptime()),
       feedCached: Boolean(cache),
       feedAgeSeconds: cache ? Math.round(cache.ageMs / 1000) : null,
+      // The thresholds that give the age above its meaning: under the TTL is
+      // fresh, under TTL + grace is served instantly while refreshing behind
+      // it, and beyond that the next request waits for upstream.
+      cacheTtlSeconds: Math.round(config.cacheTtlMs / 1000),
+      staleWhileRevalidateSeconds: Math.round(config.staleWhileRevalidateMs / 1000),
       sources: config.sources,
     });
   });

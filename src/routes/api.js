@@ -100,8 +100,12 @@ const feedMeta = (feed) => ({
   generatedAt: feed.value.generatedAt,
   fromCache: feed.fromCache,
   stale: feed.stale,
+  // stale + revalidating means the snapshot is old but a refresh is already
+  // running; stale on its own means the refresh failed.
+  revalidating: feed.revalidating ?? false,
   ageSeconds: Math.round((feed.ageMs ?? 0) / 1000),
   cacheTtlSeconds: Math.round(config.cacheTtlMs / 1000),
+  staleWhileRevalidateSeconds: Math.round(config.staleWhileRevalidateMs / 1000),
   ...(feed.error ? { warning: feed.error } : {}),
 });
 
