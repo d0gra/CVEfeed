@@ -45,7 +45,14 @@ function compact(item, detail = false) {
   if (item.exploitation) {
     out.exploitation = {
       maturity: item.exploitation.maturity,
-      ...(detail ? { evidence: item.exploitation.evidence } : {}),
+      ...(detail
+        ? {
+            evidence: item.exploitation.evidence,
+            // Where the exploit actually is. Third-party URLs like any other
+            // reference: report them, do not fetch them.
+            links: item.exploitation.links?.map((l) => ({ source: l.source, url: l.url, name: l.label })),
+          }
+        : {}),
     };
   }
   if (item.stack) out.aiStack = { categories: item.stack.categories, projects: item.stack.subjects };
@@ -138,7 +145,8 @@ const TOOLS = [
     description:
       'Fetch one vulnerability by CVE, GHSA, EUVD or advisory ID, with full detail. A CVE outside ' +
       'the current feed window is looked up directly at NVD, KEV, GitHub and EUVD in parallel, so ' +
-      'any published CVE resolves, however old.',
+      'any published CVE resolves, however old. Returns links to any Metasploit module, ' +
+      'Exploit-DB entry, Nuclei template and public proof-of-concept repositories that exist.',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string', description: 'e.g. CVE-2021-44228, GHSA-xxxx-xxxx-xxxx, EUVD-2025-1234.' } },
@@ -215,6 +223,9 @@ async function callTool(name, args = {}) {
       if (!found.item) return failure(found.reason ?? `${id} was not found.`);
       return payload(
         {
+          ...(found.pocRepos?.length
+            ? { publicPocRepositories: found.pocRepos.map((r) => ({ url: r.url, name: r.label, stars: r.stars })) }
+            : {}),
           ...(found.meta.lookup
             ? { resolvedOutsideWindow: true, lookedUpAt: found.meta.lookup.sources.filter((s) => s.ok && s.count).map((s) => s.name) }
             : {}),

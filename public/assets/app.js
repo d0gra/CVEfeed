@@ -381,10 +381,24 @@ function detailHtml(item, id = item.cveId ?? item.id) {
   }
 
   if (item.exploitation) {
+    const links = item.exploitation.links ?? [];
     blocks.push(`<div class="block"><h4>Exploit availability</h4>
       <p class="exploit-evidence">${item.exploitation.evidence
         .map((e) => `<span>${escapeHtml(e)}</span>`)
         .join('')}</p>
+      ${
+        links.length
+          ? `<ul class="exploit-links">${links
+              .map(
+                (l) =>
+                  `<li><span class="exploit-src">${escapeHtml(l.source)}</span>
+                   <a href="${escapeHtml(l.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
+                     l.label ?? l.url,
+                   )}</a></li>`,
+              )
+              .join('')}</ul>`
+          : ''
+      }
       ${
         item.exploitation.scannable
           ? '<p class="terms">A detection template exists, so this is scanned for across the internet at scale.</p>'

@@ -58,7 +58,7 @@ function factsTable(item) {
     .join('')}</dl>`;
 }
 
-function kevBlock(item) {
+function kevBlock(item, pocRepos = []) {
   if (!item.kev) return '';
   const terms = [
     item.kev.dateAdded ? `Catalogued ${fullDate(item.kev.dateAdded)}` : null,
@@ -77,10 +77,11 @@ function kevBlock(item) {
         ? `<p class="terms">Exploit code is also public: ${evidence.map(escapeHtml).join(' · ')}</p>`
         : ''
     }
+    ${exploitLinks(item.exploitation ?? {}, pocRepos)}
   </section>`;
 }
 
-function exploitBlock(item) {
+function exploitBlock(item, pocRepos = []) {
   const x = item.exploitation;
   if (!x) return '';
 
@@ -95,6 +96,7 @@ function exploitBlock(item) {
   return `<section class="callout callout-exploit">
     <h2>${escapeHtml(headline)}</h2>
     <p class="terms">${x.evidence.map((e) => escapeHtml(e)).join(' · ')}</p>
+    ${exploitLinks(x, pocRepos)}
     ${
       x.scannable
         ? '<p>A Nuclei detection template exists for this, which means it is scanned for at internet scale rather than looked for deliberately.</p>'
@@ -103,6 +105,34 @@ function exploitBlock(item) {
     <p class="aside">Signals come from Exploit-DB, Metasploit, Nuclei and published proof-of-concept
     repositories. Their absence means nothing was found, not that nothing exists.</p>
   </section>`;
+}
+
+/** The links themselves. Naming a source is not much use without them. */
+function exploitLinks(x, pocRepos = []) {
+  const rows = [];
+
+  for (const link of x.links ?? []) {
+    // The index listing is redundant once the repositories themselves are here.
+    if (link.kind === 'poc-index' && pocRepos.length) continue;
+    rows.push(
+      `<li><span class="xsrc">${escapeHtml(link.source)}</span><a href="${escapeHtml(
+        link.url,
+      )}" rel="noopener nofollow" target="_blank">${escapeHtml(link.label ?? link.url)}</a></li>`,
+    );
+  }
+
+  for (const repo of pocRepos) {
+    rows.push(
+      `<li><span class="xsrc">Public PoC</span><a href="${escapeHtml(
+        repo.url,
+      )}" rel="noopener nofollow" target="_blank">${escapeHtml(repo.label)}</a>${
+        repo.stars ? `<span class="xstars">${repo.stars.toLocaleString()} stars</span>` : ''
+      }</li>`,
+    );
+  }
+
+  if (!rows.length) return '';
+  return `<ul class="exploit-links">${rows.join('')}</ul>`;
 }
 
 function stackBlock(item) {
@@ -116,7 +146,7 @@ function stackBlock(item) {
   </section>`;
 }
 
-export function cvePage({ item, id, origin, canonical, lookedUp, assetVersion }) {
+export function cvePage({ item, id, origin, canonical, lookedUp, assetVersion, pocRepos = [] }) {
   // Search results cut titles near 60 characters, and these advisories carry
   // long machine-written ones, so the headline is trimmed hard. The full title
   // is still the <h1>.
@@ -145,8 +175,8 @@ export function cvePage({ item, id, origin, canonical, lookedUp, assetVersion })
 
     ${item.description ? `<p class="lede">${escapeHtml(item.description)}</p>` : ''}
 
-    ${kevBlock(item)}
-    ${item.exploited ? '' : exploitBlock(item)}
+    ${kevBlock(item, pocRepos)}
+    ${item.exploited ? '' : exploitBlock(item, pocRepos)}
     ${stackBlock(item)}
 
     <section class="block">

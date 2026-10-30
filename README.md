@@ -79,6 +79,12 @@ this afternoon: **can someone run an exploit today?**
 | Public PoC | PoC-in-GitHub | Proof-of-concept code is published |
 | Scanned for | Nuclei templates | A detection template exists, so the internet is scanned for it at scale |
 
+Each signal carries **links to the exploit itself** — the Metasploit module on
+Rapid7, the Exploit-DB entry, the Nuclei template on GitHub. Public PoC
+repositories are fetched per CVE when you open a record, sorted by stars, since
+resolving eleven thousand of them up front to populate an index nobody reads
+would be absurd.
+
 Filter with `exploit=poc,metasploit,...`, or `maturity=` for a minimum rung of
 the ladder (`observed`, `weaponized`, `public-exploit`, `proof-of-concept`),
 which also returns everything above it. `sort=exploitability` leads with

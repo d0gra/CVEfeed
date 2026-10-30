@@ -54,6 +54,7 @@ router.get('/cve/:id', async (req, res, next) => {
         canonical,
         lookedUp: lookedUp?.length ? lookedUp : null,
         assetVersion,
+        pocRepos: found.pocRepos ?? [],
       }),
     );
   } catch (error) {

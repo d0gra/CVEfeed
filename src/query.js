@@ -10,7 +10,7 @@ import { comparators, getFeed } from './aggregate.js';
 import { SEVERITY_ORDER } from './lib/severity.js';
 import { isCveId, lookupCve } from './lookup.js';
 import { STACK_CATEGORY_IDS } from './stack.js';
-import { attachSignals, MATURITY } from './exploits.js';
+import { attachSignals, MATURITY, pocLinksFor } from './exploits.js';
 
 const asList = (value) =>
   String(value ?? '')
@@ -218,6 +218,8 @@ export async function queryFeed(query = {}) {
   };
 }
 
+const pocRepos = (item) => (item?.exploitation?.publicPoc ? pocLinksFor(item.cveId) : Promise.resolve([]));
+
 /** One record by any of its identifiers, with the same lookup fallback. */
 export async function findRecord(id) {
   const feed = await getFeed();
@@ -231,7 +233,9 @@ export async function findRecord(id) {
       candidate.advisoryId?.toLowerCase() === needle,
   );
 
-  if (item) return { item, meta: feedMeta(feed) };
+  // A single-record view is worth the extra request that turns "a PoC exists"
+  // into the repositories themselves; the feed listing is not.
+  if (item) return { item, meta: feedMeta(feed), pocRepos: await pocRepos(item) };
 
   if (isCveId(id)) {
     const found = await lookupCve(id);
@@ -239,6 +243,7 @@ export async function findRecord(id) {
       await attachSignals([found.value.item]);
       return {
         item: found.value.item,
+        pocRepos: await pocRepos(found.value.item),
         meta: { ...feedMeta(feed), lookup: { sources: found.value.sources, lookedUpAt: found.value.lookedUpAt } },
       };
     }

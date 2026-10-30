@@ -60,7 +60,7 @@ router.get('/cve/:id', async (req, res, next) => {
   try {
     const found = await findRecord(req.params.id);
     if (!found.item) return res.status(404).json({ error: found.reason });
-    res.json({ meta: found.meta, item: found.item });
+    res.json({ meta: found.meta, item: found.item, pocRepos: found.pocRepos ?? [] });
   } catch (error) {
     next(error);
   }
