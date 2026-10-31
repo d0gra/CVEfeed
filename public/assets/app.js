@@ -277,18 +277,24 @@ function renderStackChips(stats) {
     .join('');
 }
 
-function metaLine(item, id = item.cveId ?? item.id) {
-  // The ID is plain text so it can be selected and dragged like text, with the
-  // glyph beside it for people who would rather click once.
+// The CVE ID leads every row, prominent and monospace: it is the key a
+// researcher copies, searches and cross-references, so it is the anchor the eye
+// should land on first, not the descriptive title. Threat signals sit beside
+// it; the title and metadata follow as context.
+function identLine(item, id = item.cveId ?? item.id) {
+  // Plain text so it selects and drags like text, with a glyph to copy in one
+  // click.
   const bits = [`<span class="id">${escapeHtml(id)}${copyButton('', id, 'icon', `Copy ${id}`)}</span>`];
-
   bits.push(...badges(item));
-  bits.push(`<span title="${escapeHtml(fullDate(item.published))}">${relativeTime(item.published)}</span>`);
+  return bits.join('');
+}
 
+// Quiet supporting metadata: when it was published, what it affects, its class.
+function contextLine(item) {
+  const bits = [`<span title="${escapeHtml(fullDate(item.published))}">${relativeTime(item.published)}</span>`];
   const subject = [item.vendor, item.product].filter(Boolean).join(' \u00b7 ');
   if (subject) bits.push(`<span>${escapeHtml(subject)}</span>`);
   if (item.cwes?.length) bits.push(`<span>${escapeHtml(item.cwes.slice(0, 2).join(', '))}</span>`);
-
   return bits.join('');
 }
 
@@ -326,7 +332,9 @@ function copyButton(label, value, extraClass = '', title = 'Copy') {
 
 function badges(item) {
   const out = [];
-  if (item.exploited) out.push('<span class="flag">Exploited</span>');
+  // Order matters: the loudest "act on this now" signal first.
+  if (item.exploited) out.push('<span class="flag flag-kev">Exploited</span>');
+  if (item.kev?.ransomware) out.push('<span class="flag flag-ransom">Ransomware</span>');
   // Only worth a badge when it says something "Exploited" does not.
   if (!item.exploited && item.exploitation && item.exploitation.maturity !== 'none') {
     const label = item.exploitation.weaponized
@@ -336,11 +344,12 @@ function badges(item) {
         : 'PoC published';
     out.push(`<span class="flag flag-exploit" title="${escapeHtml(item.exploitation.evidence.join(', '))}">${label}</span>`);
   }
-  if (item.kev?.ransomware) out.push('<span class="flag flag-ransom">Ransomware</span>');
-  if (item.kind === 'advisory') out.push('<span class="flag flag-quiet">Advisory</span>');
-  if (Number.isFinite(item.epss) && item.epss >= 1) {
-    out.push(`<span class="flag flag-quiet">EPSS ${item.epss.toFixed(1)}%</span>`);
+  // EPSS is a core prioritisation metric, so show it whenever it is known, not
+  // only above a threshold.
+  if (Number.isFinite(item.epss) && item.epss >= 0.1) {
+    out.push(`<span class="flag flag-epss" title="EPSS: probability of exploitation in the next 30 days">EPSS ${item.epss.toFixed(1)}%</span>`);
   }
+  if (item.kind === 'advisory') out.push('<span class="flag flag-quiet">Advisory</span>');
   if (item.outsideWindow) out.push('<span class="flag flag-quiet">Looked up</span>');
   // Name the affected project rather than the category: "vLLM" says more at a
   // glance than "Inference & serving", and the category is a click away.
@@ -474,10 +483,11 @@ function cardHtml(item) {
         <span class="mark-sev">${escapeHtml(SEV_SHORT[sev] ?? sev)}</span>
       </span>
       <span class="entry-body">
+        <span class="entry-ident">${identLine(item, id)}</span>
         <h3 class="entry-title">
           <button type="button" class="entry-toggle" aria-expanded="${isOpen}">${escapeHtml(item.title)}</button>
         </h3>
-        <span class="entry-meta">${metaLine(item, id)}</span>
+        <span class="entry-meta">${contextLine(item)}</span>
       </span>
       <span class="entry-sources">${(item.sourceIds ?? [])
         .map((sid) => escapeHtml(SOURCE_LABELS[sid] ?? sid))
