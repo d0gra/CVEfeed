@@ -16,7 +16,7 @@ import { approvedPocsForCve } from '../store/pocStore.js';
 import { issueChallenge, turnstileSiteKey, usingTurnstile } from '../lib/captcha.js';
 import { originFor } from '../pages/layout.js';
 import { cvePage, notFoundPage } from '../pages/cve.js';
-import { agentsPage, earnPage, exploitedPage, stackCategoryPage, stackIndexPage, termsPage } from '../pages/index.js';
+import { agentsPage, earnPage, exploitedPage, moderatePage, stackCategoryPage, stackIndexPage, termsPage } from '../pages/index.js';
 
 const router = Router();
 
@@ -168,6 +168,17 @@ router.get('/terms', (req, res) => {
   html(res, termsPage({ origin, canonical: `${origin}/terms`, assetVersion }));
 });
 
+router.get('/moderate', (req, res) => {
+  const origin = originFor(req);
+  // Unlisted admin page; the API enforces the token on every action.
+  res
+    .status(200)
+    .type('html')
+    .set('Cache-Control', 'no-store')
+    .set('X-Robots-Tag', 'noindex')
+    .send(moderatePage({ canonical: `${origin}/moderate`, assetVersion, enabled: Boolean(config.pocModerationToken) }));
+});
+
 router.get('/robots.txt', (req, res) => {
   const origin = originFor(req);
   res
@@ -188,6 +199,7 @@ router.get('/robots.txt', (req, res) => {
         '# Filtered views are the same records in a different order, and the',
         '# query space is unbounded. The canonical pages above carry the content.',
         'Disallow: /*?',
+        'Disallow: /moderate',
         'Disallow: /api/',
         '',
         `Sitemap: ${origin}/sitemap.xml`,

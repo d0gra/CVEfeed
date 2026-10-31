@@ -365,9 +365,12 @@ function detailHtml(item, id = item.cveId ?? item.id) {
   const blocks = [];
 
   // The actions people reach for: a shareable link, and something pasteable
-  // into a ticket without reformatting.
+  // into a ticket without reformatting. The full page is where community PoCs
+  // live and where one can be submitted, so link there explicitly.
+  const cveUrl = `/cve/${encodeURIComponent(id)}`;
   blocks.push(`<div class="detail-actions">
-    ${copyButton('Copy link', `${location.origin}/cve/${encodeURIComponent(id)}`, 'quiet', 'Copy a permalink to this advisory')}
+    <a class="detail-link" href="${cveUrl}">Open full page · submit a PoC →</a>
+    ${copyButton('Copy link', `${location.origin}${cveUrl}`, 'quiet', 'Copy a permalink to this advisory')}
     ${copyButton('Copy as Markdown', markdownFor(item, id), 'quiet', 'Copy a summary ready to paste into a ticket')}
   </div>`);
 

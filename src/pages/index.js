@@ -4,3 +4,4 @@ export { cvePage, notFoundPage } from './cve.js';
 export { layout, originFor, escapeHtml } from './layout.js';
 export { earnPage } from './earn.js';
 export { termsPage } from './legal.js';
+export { moderatePage } from './moderate.js';
