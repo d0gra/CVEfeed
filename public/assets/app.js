@@ -57,7 +57,9 @@ const dom = {
 
 const state = {
   q: '',
-  sort: 'priority',
+  // Newest first: a feed is read for what is new. Priority ordering is a
+  // click away in the sort control.
+  sort: 'newest',
   days: 0,
   exploited: false,
   severity: new Set(),
@@ -114,7 +116,7 @@ const fullDate = (iso) => {
 function readUrl() {
   const p = new URLSearchParams(location.search);
   state.q = p.get('q') ?? '';
-  state.sort = p.get('sort') ?? 'priority';
+  state.sort = p.get('sort') ?? 'newest';
   state.days = Number.parseInt(p.get('days') ?? '0', 10) || 0;
   state.exploited = p.get('exploited') === '1';
   state.page = Math.max(Number.parseInt(p.get('page') ?? '1', 10) || 1, 1);
@@ -136,7 +138,7 @@ function stackParam() {
 function writeUrl() {
   const p = new URLSearchParams();
   if (state.q) p.set('q', state.q);
-  if (state.sort !== 'priority') p.set('sort', state.sort);
+  if (state.sort !== 'newest') p.set('sort', state.sort);
   if (state.days) p.set('days', String(state.days));
   if (state.exploited) p.set('exploited', '1');
   if (state.severity.size) p.set('severity', [...state.severity].join(','));

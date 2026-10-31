@@ -55,7 +55,7 @@ check('the official client completes the handshake', async () => {
 check('tools/list returns usable schemas', async () => {
   ({ tools } = await client.listTools());
   const names = tools.map((t) => t.name).sort();
-  assert.deepEqual(names, ['feed_status', 'get_cve', 'list_exploited', 'search_cves']);
+  assert.deepEqual(names, ['feed_status', 'get_cve', 'get_exploits', 'list_exploited', 'search_cves']);
   for (const tool of tools) {
     assert.ok(tool.description?.length > 40, `${tool.name} needs a real description`);
     assert.equal(tool.inputSchema.type, 'object', `${tool.name} schema must be an object`);
@@ -127,6 +127,48 @@ check('feed_status reports source health and categories', async () => {
   assert.ok(body.aiStackCategories.length === 7);
   assert.equal(typeof body.totalRecords, 'number');
   assert.equal(typeof body.inAiStack, 'number');
+});
+
+check('search_cves paginates', async () => {
+  const p1 = parse(await client.callTool({ name: 'search_cves', arguments: { limit: 5, page: 1 } }));
+  const p2 = parse(await client.callTool({ name: 'search_cves', arguments: { limit: 5, page: 2 } }));
+  assert.equal(p1.page, 1);
+  assert.equal(p2.page, 2);
+  assert.ok(p1.pages > 1, 'expected more than one page');
+  const a = p1.results.map((r) => r.id).join();
+  const b = p2.results.map((r) => r.id).join();
+  assert.notEqual(a, b, 'page 2 must differ from page 1');
+});
+
+check('get_exploits returns the exploit picture for a CVE', async () => {
+  const body = parse(await client.callTool({ name: 'get_exploits', arguments: { id: 'CVE-2021-44228' } }));
+  assert.equal(body.id, 'CVE-2021-44228');
+  assert.equal(body.exploitAvailable, true);
+  assert.ok(body.maturity, 'expected a maturity rung');
+  assert.ok(body.links.length > 0, 'expected exploit links');
+  assert.ok(body.evidence.length > 0, 'expected named evidence');
+});
+
+check('get_exploits says so plainly when nothing is known', async () => {
+  // A real but obscure CVE unlikely to carry any exploit signal.
+  const res = await client.callTool({ name: 'get_exploits', arguments: { id: 'CVE-2011-2523' } });
+  const body = parse(res);
+  if (body.exploitAvailable === false) {
+    assert.match(body.note, /absence of evidence/i, 'a negative must not read as proof of safety');
+  } else {
+    assert.ok(body.maturity, 'otherwise it must report a maturity');
+  }
+});
+
+check('get_exploits rejects a missing id', async () => {
+  const res = await client.callTool({ name: 'get_exploits', arguments: {} });
+  assert.equal(res.isError, true);
+});
+
+check('feed_status reports which storage is serving', async () => {
+  const body = parse(await client.callTool({ name: 'feed_status', arguments: {} }));
+  assert.ok(['database', 'memory'].includes(body.storage.mode), `got ${body.storage?.mode}`);
+  assert.ok(body.coverage, 'coverage must be described so an empty result can be read correctly');
 });
 
 check('an unknown tool is rejected', async () => {

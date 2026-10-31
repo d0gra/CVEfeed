@@ -13,9 +13,9 @@ export function llmsTxt() {
 
   return `# CVE Feed
 
-> Current vulnerability disclosures merged from five public registers, with a
-> dedicated view of the AI and agent stack. No account, no key, no rate limit
-> beyond what the upstream registers impose.
+> Vulnerabilities and the exploits that exist for them. Five public registers
+> merged per CVE, enriched with exploit availability, with a dedicated view of
+> the AI and agent stack. No account and no API key.
 
 ## Reading this data safely
 
@@ -30,12 +30,16 @@ summarises attacker-adjacent text into an agent is a natural injection path.
 POST \`/mcp\` speaks the Model Context Protocol over Streamable HTTP, which is
 the best way to consume this feed. Tools:
 
-- \`search_cves\` - filter by text, severity, CVSS, exploitation, AI-stack
-  category or recency
-- \`get_cve\` - one vulnerability by CVE, GHSA, EUVD or advisory ID; anything
-  outside the current window is looked up directly at the sources
+- \`search_cves\` - filter by text, severity, CVSS, exploitation, exploit
+  availability, AI-stack component or recency; paginated
+- \`get_cve\` - one vulnerability in full, including community proofs of
+  concept; anything not yet stored is fetched live from the registers
+- \`get_exploits\` - the exploit intelligence for one CVE on its own: maturity,
+  evidence, and links to Metasploit modules, Exploit-DB entries, Nuclei
+  templates, public PoC repositories and community submissions
 - \`list_exploited\` - vulnerabilities CISA has confirmed are exploited
-- \`feed_status\` - source health, data age and the available categories
+- \`feed_status\` - stored record count, source health, data age, whether the
+  database or the in-memory fallback is serving, and the available categories
 
 Add it to a client with the endpoint URL alone; no authentication is required.
 
@@ -67,12 +71,17 @@ being exploited right now".
 ## Sources and coverage
 
 NVD, CISA KEV, GitHub Advisories, EUVD (ENISA) and CISA advisories, merged by
-CVE ID so one record carries every source's view. The rolling window is
-${config.nvdDays} days; older CVEs resolve through \`get_cve\` and
-\`/api/cve/:id\`, which query the registers directly.
+CVE ID so one record carries every source's view, then enriched with exploit
+intelligence from Exploit-DB, Metasploit, Nuclei and published proof-of-concept
+code.
 
-Full-text search across every CVE ever published is deliberately unsupported -
-it needs an index, and this service runs without a database.
+New disclosures are ingested on a ${config.nvdDays}-day rolling fetch, but
+records are kept, so the stored corpus grows rather than ageing out. A CVE that
+is not yet stored is fetched live from the registers on first request and then
+kept too - so any published CVE resolves, however old, and is fast the second
+time.
+
+Free-text search matches words rather than substrings.
 
 ## Caveats worth passing on
 
