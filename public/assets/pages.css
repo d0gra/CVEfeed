@@ -219,3 +219,72 @@
   .doc-score-num { font-size: 24px; }
   .page-masthead { padding-top: 24px; }
 }
+
+/* ---------- community proofs of concept ---------- */
+
+.poc-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.poc-count {
+  font-family: var(--mono); font-size: 13px; color: var(--paper);
+  background: var(--accent); border-radius: 10px; padding: 1px 8px; margin-left: 6px;
+}
+.poc-disclaimer {
+  font-size: 12.5px; color: var(--high); border-left: 2px solid var(--high);
+  padding: 8px 0 8px 14px; margin: 0 0 18px;
+}
+.poc-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 20px; }
+.poc { padding: 16px 0; border-top: 1px solid var(--hair); }
+.poc-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.poc-head h3 { margin: 0; font-size: 15px; font-weight: 500; }
+.poc-by { font-size: 11.5px; color: var(--ink-faint); }
+.poc-affected { font-size: 12.5px; color: var(--ink-soft); margin: 6px 0; }
+.poc-affected span { color: var(--ink-faint); margin-right: 8px; }
+.poc-code { max-height: 420px; overflow: auto; }
+.poc-code code { white-space: pre-wrap; word-break: break-word; }
+
+/* --- the ambient "agent reviewing" indicator --- */
+.agent-scan { display: inline-flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--ink-faint); font-family: var(--mono); }
+.agent-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; animation: agent-pulse 1.4s ease-in-out infinite; }
+.agent-text { opacity: 0.85; transition: opacity 0.3s; }
+@keyframes agent-pulse { 0%,100% { opacity: 0.35; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1.1); } }
+@media (prefers-reduced-motion: reduce) { .agent-dot { animation: none; } }
+
+/* --- submit form --- */
+.poc-submit { margin-top: 26px; border-top: 1px solid var(--hair); padding-top: 18px; }
+.poc-submit > summary { cursor: pointer; font-size: 14px; color: var(--accent-ink); font-weight: 500; }
+.poc-legal { font-size: 12.5px; color: var(--ink-soft); line-height: 1.6; margin: 14px 0 18px; }
+.poc-form { display: grid; gap: 16px; max-width: 640px; }
+.field { display: grid; gap: 6px; }
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.field label { font-size: 12px; color: var(--ink-soft); }
+.field .req { color: var(--critical); }
+.field .opt { color: var(--ink-faint); }
+.poc-form input, .poc-form textarea, .poc-form select {
+  font: inherit; font-size: 13px; color: var(--ink); background: var(--paper-raised);
+  border: 1px solid var(--hair-strong); border-radius: 3px; padding: 8px 10px; width: 100%;
+}
+.poc-form textarea { font-family: var(--mono); font-size: 12.5px; resize: vertical; }
+.poc-form input:focus, .poc-form textarea:focus, .poc-form select:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+.hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+.acks { border: 1px solid var(--hair); border-radius: 4px; padding: 14px; display: grid; gap: 10px; margin: 0; }
+.acks legend { font-size: 12px; color: var(--ink-soft); padding: 0 6px; }
+.ack { display: grid; grid-template-columns: 18px 1fr; gap: 10px; align-items: start; font-size: 12.5px; color: var(--ink-soft); line-height: 1.5; }
+.ack input { width: 16px; height: 16px; margin-top: 1px; accent-color: var(--accent); }
+.field-captcha { max-width: 260px; }
+.poc-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.poc-btn {
+  font: inherit; font-size: 13px; font-weight: 500; color: var(--paper); background: var(--accent);
+  border: 0; border-radius: 3px; padding: 9px 18px; cursor: pointer;
+}
+.poc-btn:hover { background: var(--accent-ink); }
+.poc-result { font-size: 12.5px; }
+.poc-result[data-kind="ok"] { color: var(--low); }
+.poc-result[data-kind="err"] { color: var(--critical); }
+
+@media (max-width: 680px) { .field-row { grid-template-columns: 1fr; } }
+
+/* ---------- earn / terms ---------- */
+.earn-list { list-style: none; margin: 18px 0 0; padding: 0; display: grid; gap: 16px; }
+.earn-list > li { padding-bottom: 14px; border-bottom: 1px solid var(--hair); }
+.earn-list a { font-size: 15px; }
+.earn-list p { margin: 5px 0 0; font-size: 13px; color: var(--ink-faint); }
+.term-list { margin: 10px 0 0; padding-left: 20px; display: grid; gap: 7px; font-size: 13.5px; color: var(--ink-soft); line-height: 1.5; }

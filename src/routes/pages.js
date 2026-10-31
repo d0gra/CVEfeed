@@ -12,9 +12,11 @@ import { findRecord, queryFeed } from '../query.js';
 import { isCveId } from '../lookup.js';
 import { STACK_CATEGORIES } from '../stack.js';
 import { listIdsForSitemap } from '../store/cveStore.js';
+import { approvedPocsForCve } from '../store/pocStore.js';
+import { issueChallenge, turnstileSiteKey, usingTurnstile } from '../lib/captcha.js';
 import { originFor } from '../pages/layout.js';
 import { cvePage, notFoundPage } from '../pages/cve.js';
-import { agentsPage, exploitedPage, stackCategoryPage, stackIndexPage } from '../pages/index.js';
+import { agentsPage, earnPage, exploitedPage, stackCategoryPage, stackIndexPage, termsPage } from '../pages/index.js';
 
 const router = Router();
 
@@ -46,16 +48,33 @@ router.get('/cve/:id', async (req, res, next) => {
     }
 
     const lookedUp = found.meta.lookup?.sources?.filter((s) => s.ok && s.count).map((s) => s.name);
+    const cveId = found.item.cveId ?? found.item.ghsaId ?? found.item.advisoryId ?? id;
+    const [communityPocs, challenge] = await Promise.all([approvedPocsForCve(cveId), Promise.resolve(issueChallenge())]);
     html(
       res,
       cvePage({
         item: found.item,
-        id: found.item.cveId ?? found.item.ghsaId ?? found.item.advisoryId ?? id,
+        id: cveId,
         origin,
         canonical,
         lookedUp: lookedUp?.length ? lookedUp : null,
         assetVersion,
         pocRepos: found.pocRepos ?? [],
+        communityPocs: communityPocs.map((p) => ({
+          title: p.title,
+          code: p.code,
+          writeup: p.writeup,
+          affected: p.affected,
+          author: p.author,
+          license: p.license,
+          references: p.references,
+          submittedAt: p.submittedAt,
+        })),
+        captcha: {
+          usingTurnstile: usingTurnstile(),
+          turnstileSiteKey: turnstileSiteKey(),
+          challenge,
+        },
       }),
     );
   } catch (error) {
@@ -139,6 +158,16 @@ export async function agentsPageHandler(req, res, next) {
   }
 }
 
+router.get('/earn', (req, res) => {
+  const origin = originFor(req);
+  html(res, earnPage({ origin, canonical: `${origin}/earn`, assetVersion }));
+});
+
+router.get('/terms', (req, res) => {
+  const origin = originFor(req);
+  html(res, termsPage({ origin, canonical: `${origin}/terms`, assetVersion }));
+});
+
 router.get('/robots.txt', (req, res) => {
   const origin = originFor(req);
   res
@@ -151,6 +180,8 @@ router.get('/robots.txt', (req, res) => {
         'Allow: /cve/',
         'Allow: /ai-stack',
         'Allow: /exploited',
+        'Allow: /earn',
+        'Allow: /terms',
         'Allow: /mcp',
         'Allow: /llms.txt',
         '',
@@ -175,6 +206,8 @@ router.get('/sitemap.xml', async (req, res, next) => {
       { loc: `${origin}/ai-stack`, priority: '0.9', changefreq: 'daily' },
       { loc: `${origin}/exploited`, priority: '0.9', changefreq: 'daily' },
       { loc: `${origin}/mcp`, priority: '0.8', changefreq: 'weekly' },
+      { loc: `${origin}/earn`, priority: '0.7', changefreq: 'monthly' },
+      { loc: `${origin}/terms`, priority: '0.3', changefreq: 'yearly' },
       ...STACK_CATEGORIES.map((c) => ({
         loc: `${origin}/ai-stack/${c.id}`,
         priority: '0.7',

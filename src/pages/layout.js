@@ -39,6 +39,7 @@ const nav = (current) =>
     ['/', 'Feed'],
     ['/ai-stack', 'AI stack'],
     ['/exploited', 'Exploited'],
+    ['/earn', 'Earn'],
     ['/mcp', 'For agents'],
   ]
     .map(
@@ -99,7 +100,7 @@ ${jsonLd.map(jsonLdScript).join('\n')}
   <footer class="colophon">
     <p>Aggregated from NVD, CISA KEV, GitHub Advisories, EUVD (ENISA) and CISA advisories.
     Always confirm against the upstream advisory before acting.</p>
-    <p><a href="/">Live dashboard</a> · <a href="/mcp">MCP for agents</a> · <a href="/llms.txt">llms.txt</a></p>
+    <p><a href="/">Live dashboard</a> · <a href="/mcp">MCP for agents</a> · <a href="/earn">Earn</a> · <a href="/terms">Terms</a> · <a href="/llms.txt">llms.txt</a></p>
   </footer>
 </div>
 <script>

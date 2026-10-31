@@ -54,6 +54,24 @@ export const config = {
   // budget even when every lookup spends one request against it. 0 disables.
   lookupBurst: clamp(int(process.env.LOOKUP_BURST, 15), 0, 10_000),
   lookupRefillPerSec: Number.parseFloat(process.env.LOOKUP_REFILL_PER_SEC || '0.2') || 0.2,
+  // Community PoC submissions.
+  // Submissions are held for review and never shown publicly until approved;
+  // auto-approve is for a trusted, private instance only and is off by default.
+  pocAutoApprove: bool(process.env.POC_AUTO_APPROVE, false),
+  // Secret for the moderation endpoints. Unset disables them (approve via the
+  // database directly). Reuses REFRESH_TOKEN if no dedicated one is set.
+  pocModerationToken: process.env.POC_MODERATION_TOKEN || process.env.REFRESH_TOKEN || '',
+  // Max submissions accepted per IP per hour.
+  pocSubmitMax: clamp(int(process.env.POC_SUBMIT_MAX, 5), 0, 1000),
+  // Largest PoC body accepted, in characters. express.json's 64kb cap sits above it.
+  pocMaxChars: clamp(int(process.env.POC_MAX_CHARS, 20_000), 500, 60_000),
+  // CAPTCHA. With a Cloudflare Turnstile secret the widget is used and verified
+  // server-side; without one, a built-in signed challenge is the gate. The
+  // HMAC secret keeps the built-in challenge stateless; it falls back to a
+  // random per-process value when unset (challenges then reset on restart).
+  turnstileSecret: process.env.TURNSTILE_SECRET || '',
+  turnstileSiteKey: process.env.TURNSTILE_SITE_KEY || '',
+  captchaSecret: process.env.CAPTCHA_SECRET || '',
   // Per-entity cache entries - one per CVE looked up - are capped, because
   // /cve/:id answers for any published CVE and nothing stops a crawler from
   // walking all 300,000 of them.

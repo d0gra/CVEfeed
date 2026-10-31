@@ -117,6 +117,34 @@ Free-text search uses a MongoDB text index, which matches words rather than
 substrings — a deliberate difference from the in-memory scan, which could not
 survive a growing collection.
 
+## Community proofs of concept
+
+Every CVE page takes a community proof of concept. It is contribution
+infrastructure for *published* vulnerabilities — think Exploit-DB, not a
+marketplace — and it is built to be safe to run in public:
+
+- **Text only.** No file uploads; there is nothing to host or scan. The body is
+  validated as plain text (binary pastes rejected) and always rendered escaped,
+  inside `<pre>`, as data.
+- **Reviewed before it appears.** A submission is stored `pending` and is never
+  shown publicly until a moderator approves it (`POC_AUTO_APPROVE` exists for a
+  trusted private instance and defaults off). Approve via the token-protected
+  `GET /api/pocs/pending` and `POST /api/pocs/:id/approve`.
+- **Gated.** A CAPTCHA (Cloudflare Turnstile when configured, a built-in signed
+  challenge otherwise), a honeypot field, a per-IP hourly cap, and the global
+  rate limiter all stand in front of it.
+- **Validated hard.** Published-CVE id required, length bounds, http(s)-only
+  references, six mandatory legal acknowledgements, and a chosen licence.
+- **Private contact stays private.** A contact is kept for the moderator and is
+  never returned by the public API or shown on the page.
+- **De-duplicated and serialised** in Atlas (`pocs` collection), one document
+  per submission, fingerprinted so the same PoC cannot be stored twice.
+
+Legitimate ways to be *paid* for vulnerability research — bug bounty platforms,
+vendor programs, competitions — are at [`/earn`](src/pages/earn.js), framed with
+the legal boundary stated plainly: **this platform does not buy, sell, or broker
+exploits.** The submission and use terms are at [`/terms`](src/pages/legal.js).
+
 ## Rate limiting
 
 Two kinds, for two problems.
@@ -328,6 +356,9 @@ All endpoints return JSON.
 | `GET /api/stack` | The AI-stack categories the feed classifies against |
 | `GET /api/exploit-sources` | What each exploit signal means, and whether its source is answering |
 | `GET /api/cve/:id` | One record by CVE, GHSA, EUVD or advisory ID, falling back to a direct source lookup |
+| `GET /api/cve/:id/pocs` | Approved community proofs of concept for a CVE |
+| `POST /api/cve/:id/pocs` | Submit a PoC (text, CAPTCHA-gated, held for review) |
+| `GET /api/pocs/pending`, `POST /api/pocs/:id/{approve,reject}` | Moderation (token-protected) |
 | `POST /api/refresh` | Force a refetch (requires `REFRESH_TOKEN`) |
 | `GET /healthz` | Liveness, cache age, and the TTL/grace thresholds that give that age its meaning |
 | `POST /mcp` | Model Context Protocol endpoint ([see above](#mcp)) |

@@ -914,3 +914,40 @@ setInterval(() => {
 setInterval(() => {
   if (document.visibilityState === 'visible' && !inFlight) load();
 }, 5 * 60_000);
+
+// Ambient "an agent is continuously hunting for the newest threats" indicator.
+// Cosmetic: it cycles status lines and, when the feed has loaded, name-drops
+// real CVE ids and source names so it reads as live triage rather than filler.
+(function threatScanner() {
+  const el = document.getElementById('threatscan-text');
+  if (!el) return;
+
+  const sources = ['NVD', 'CISA KEV', 'GitHub Advisories', 'EUVD', 'CISA advisories'];
+  const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+  const latestIds = () =>
+    (lastPayload?.items ?? [])
+      .slice(0, 8)
+      .map((i) => i.cveId || i.id)
+      .filter(Boolean);
+
+  function nextLine() {
+    const ids = latestIds();
+    const lines = [
+      `Scanning ${pick(sources)} for new disclosures…`,
+      'Correlating EPSS and exploit signals…',
+      `Watching ${sources.length} registers · newest first`,
+      'Checking CISA KEV for active exploitation…',
+    ];
+    if (ids.length) {
+      lines.push(`Triaging ${pick(ids)}…`, `New: ${pick(ids)} · assessing severity…`);
+      const exploited = (lastPayload?.items ?? []).find((i) => i.exploited);
+      if (exploited) lines.push(`${exploited.cveId || exploited.id} flagged exploited · prioritising`);
+    }
+    return pick(lines);
+  }
+
+  el.textContent = nextLine();
+  setInterval(() => {
+    if (document.visibilityState === 'visible') el.textContent = nextLine();
+  }, 2800);
+})();

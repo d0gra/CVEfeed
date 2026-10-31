@@ -7,6 +7,7 @@
  * alone. Rendered on the server so it is readable without JavaScript.
  */
 import { breadcrumbJsonLd, escapeHtml, layout, truncate } from './layout.js';
+import { pocSection } from './pocSection.js';
 
 const SOURCE_LABELS = {
   nvd: 'NVD',
@@ -146,7 +147,7 @@ function stackBlock(item) {
   </section>`;
 }
 
-export function cvePage({ item, id, origin, canonical, lookedUp, assetVersion, pocRepos = [] }) {
+export function cvePage({ item, id, origin, canonical, lookedUp, assetVersion, pocRepos = [], communityPocs = [], captcha }) {
   // Search results cut titles near 60 characters, and these advisories carry
   // long machine-written ones, so the headline is trimmed hard. The full title
   // is still the <h1>.
@@ -218,6 +219,8 @@ export function cvePage({ item, id, origin, canonical, lookedUp, assetVersion, p
           )} when you asked for it.</p>`
         : ''
     }
+
+    ${captcha ? pocSection({ id, pocs: communityPocs, captcha }) : ''}
 
     <section class="block">
       <h2>Query this programmatically</h2>
