@@ -58,6 +58,10 @@ export async function getDb() {
     try {
       await client.connect();
       connected = true;
+      // Clear a prior failure so health does not report a stale error next to
+      // a live connection.
+      lastError = null;
+      retryAfter = 0;
       return client;
     } catch (error) {
       // Close the failed client, or its monitoring threads leak for the life
