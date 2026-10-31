@@ -8,6 +8,7 @@ import api from './routes/api.js';
 import { mountMcp } from './mcp.js';
 import { createLimiter } from './lib/ratelimit.js';
 import pages, { agentsPageHandler, assetVersionValue, setAssetVersion } from './routes/pages.js';
+import { mongoStatus } from './lib/mongo.js';
 import { missingPage, originFor } from './pages/index.js';
 import { llmsTxt } from './llms.js';
 import { getFeed, feedCacheStatus } from './aggregate.js';
@@ -97,6 +98,11 @@ export function createApp() {
       cacheTtlSeconds: Math.round(config.cacheTtlMs / 1000),
       staleWhileRevalidateSeconds: Math.round(config.staleWhileRevalidateMs / 1000),
       sources: config.sources,
+      // Why the database is or is not being used. The error text is the whole
+      // point: a connection timeout means the network is blocked (Atlas
+      // allowlist, or the host firewalling outbound 27017), whereas an auth
+      // error means the credentials are wrong. It saves guessing.
+      mongo: mongoStatus(),
     });
   });
 
