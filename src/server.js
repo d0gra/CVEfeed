@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import config from './config.js';
 import api from './routes/api.js';
 import { mountMcp } from './mcp.js';
+import { createLimiter } from './lib/ratelimit.js';
 import pages, { agentsPageHandler, assetVersionValue, setAssetVersion } from './routes/pages.js';
 import { missingPage, originFor } from './pages/index.js';
 import { llmsTxt } from './llms.js';
@@ -53,6 +54,12 @@ export function createApp() {
   app.use(compression());
   app.use(express.json({ limit: '64kb' }));
 
+  // Per-IP rate limiting. Static assets and /healthz are exempt (a single page
+  // load pulls several assets, and health checks must never be throttled).
+  const apiLimiter = createLimiter({ windowMs: config.rateWindowMs, max: config.apiRateMax });
+  const mcpLimiter = createLimiter({ windowMs: config.rateWindowMs, max: config.mcpRateMax });
+  const pageLimiter = createLimiter({ windowMs: config.rateWindowMs, max: config.pageRateMax });
+
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
@@ -94,12 +101,15 @@ export function createApp() {
   });
 
   // A browser asking for /mcp gets the page; an MCP client gets the protocol.
+  app.use('/mcp', mcpLimiter);
   app.get('/mcp', agentsPageHandler);
 
   // An MCP endpoint, so the feed is usable as a tool rather than only a page.
   mountMcp(app, '/mcp');
 
-  // Server-rendered pages: what a crawler, a link preview or curl actually sees.
+  // Server-rendered pages: what a crawler, a link preview or curl actually
+  // sees. /cve/:id can fan out to the upstream lookup, so it is worth a cap.
+  app.use(pageLimiter);
   app.use(pages);
 
   // The convention agents look for when handed a bare domain.
@@ -107,7 +117,7 @@ export function createApp() {
     res.type('text/plain; charset=utf-8').set('Cache-Control', 'public, max-age=3600').send(llmsTxt());
   });
 
-  app.use('/api', api);
+  app.use('/api', apiLimiter, api);
 
   app.use(
     express.static(publicDir, {

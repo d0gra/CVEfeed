@@ -117,6 +117,39 @@ Free-text search uses a MongoDB text index, which matches words rather than
 substrings — a deliberate difference from the in-memory scan, which could not
 survive a growing collection.
 
+## Rate limiting
+
+Two kinds, for two problems.
+
+**Per-IP limits** on the public surface, so one caller cannot flood the API,
+the MCP endpoint or the database. Each returns `429` with `Retry-After` once a
+client exceeds its window; static assets and `/healthz` are exempt. Defaults
+are generous (`API_RATE_MAX` 120/min, `MCP_RATE_MAX` 60/min, `PAGE_RATE_MAX`
+240/min) and every one is tunable, or set to `0` to disable.
+
+**A shared budget for the upstream lookup fan-out.** Resolving a CVE outside
+the window calls four registers at once, and one of those calls spends from
+GitHub's anonymous **60-requests-an-hour-per-IP** budget — which belongs to the
+whole host, not just this app. A spray of distinct CVE ids could drain it and
+break the feed's own GitHub refresh. A token bucket (`LOOKUP_BURST` 15, then
+`LOOKUP_REFILL_PER_SEC` 0.2) caps the fan-out; a declined lookup reads as "not
+found", and is deliberately not cached so it retries once the bucket refills.
+
+This is in-process, so it resets on restart and does not coordinate across
+workers — right for casual abuse and crawler politeness. A determined attacker
+is a job for the edge (Cloudflare in front of the domain).
+
+### Looked-up CVEs are cached in the database
+
+The feed only fetches a recent window, so a search for an older CVE resolves it
+live from the registers. With MongoDB configured, that resolved record is
+**written to the store** (flagged `outsideWindow`, so it stays out of the
+browsable window and the counts, but is found by id). The next request for it
+is one database read instead of a four-source fan-out — so each old CVE is
+searched upstream at most once, ever, rather than re-fetched every six hours and
+on every redeploy. Measured: a cold lookup ~2.4s, the same lookup afterwards
+~35ms.
+
 ## Exploit availability
 
 CISA KEV answers "is this being exploited?" and EPSS answers "is it likely to

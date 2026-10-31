@@ -1,6 +1,7 @@
-import { cached } from './lib/cache.js';
+import { cached, clearCacheKey } from './lib/cache.js';
 import { finalize, mergeAll } from './merge.js';
 import { enabledSources } from './sources/index.js';
+import { lookupBucket } from './lib/ratelimit.js';
 
 /**
  * Single-CVE lookup against the sources directly.
@@ -18,6 +19,14 @@ export const isCveId = (value) => CVE_ID.test(String(value ?? '').trim());
 const LOOKUP_TTL_MS = 6 * 60 * 60 * 1000;
 
 async function collectOne(cveId) {
+  // A burst of distinct CVE ids would otherwise fan out one upstream request
+  // each - including one against GitHub's thin anonymous budget, shared across
+  // the whole host. The bucket caps that; a declined lookup reads as "not
+  // found", which is already how an out-of-window miss behaves.
+  if (lookupBucket && !lookupBucket.tryTake()) {
+    return { item: null, sources: [], lookedUpAt: new Date().toISOString(), throttled: true };
+  }
+
   const sources = enabledSources().filter((source) => typeof source.lookupById === 'function');
 
   const results = await Promise.all(
@@ -47,9 +56,15 @@ async function collectOne(cveId) {
   };
 }
 
-export function lookupCve(cveId) {
+export async function lookupCve(cveId) {
   const normalized = String(cveId).toUpperCase();
-  return cached(`lookup-${normalized}`, () => collectOne(normalized), { ttlMs: LOOKUP_TTL_MS, evictable: true });
+  const result = await cached(`lookup-${normalized}`, () => collectOne(normalized), {
+    ttlMs: LOOKUP_TTL_MS,
+    evictable: true,
+  });
+  // Don't let a throttled (empty-by-choice) answer stick in the cache.
+  if (result.value.throttled) clearCacheKey(`lookup-${normalized}`);
+  return result;
 }
 
 export default { lookupCve, isCveId };

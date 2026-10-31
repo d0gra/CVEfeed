@@ -44,6 +44,16 @@ export const config = {
   // feed is more useful on time than complete.
   exploitBudgetMs: clamp(int(process.env.EXPLOIT_BUDGET_SECONDS, 25), 1, 300) * 1000,
   vulncheckToken: process.env.VULNCHECK_TOKEN || '',
+  // Inbound rate limiting (per client IP, per minute). 0 disables a limiter.
+  rateWindowMs: clamp(int(process.env.RATE_WINDOW_SECONDS, 60), 1, 3600) * 1000,
+  apiRateMax: clamp(int(process.env.API_RATE_MAX, 120), 0, 100_000),
+  mcpRateMax: clamp(int(process.env.MCP_RATE_MAX, 60), 0, 100_000),
+  pageRateMax: clamp(int(process.env.PAGE_RATE_MAX, 240), 0, 100_000),
+  // The shared bucket for the upstream lookup fan-out: a burst of this many,
+  // then a steady trickle. Sized to stay well under GitHub's 60/hour anon
+  // budget even when every lookup spends one request against it. 0 disables.
+  lookupBurst: clamp(int(process.env.LOOKUP_BURST, 15), 0, 10_000),
+  lookupRefillPerSec: Number.parseFloat(process.env.LOOKUP_REFILL_PER_SEC || '0.2') || 0.2,
   // Per-entity cache entries - one per CVE looked up - are capped, because
   // /cve/:id answers for any published CVE and nothing stops a crawler from
   // walking all 300,000 of them.

@@ -233,6 +233,16 @@ export function clearCache() {
   evictable.clear();
 }
 
+/** Forget a single key, in memory and on disk. */
+export function clearCacheKey(key) {
+  memory.delete(key);
+  evictable.delete(key);
+  if (config.diskCache) {
+    fs.rm(fileFor(key, true), { force: true }).catch(() => {});
+    fs.rm(fileFor(key, false), { force: true }).catch(() => {});
+  }
+}
+
 /** For tests and /healthz: what the cache is actually holding. */
 export const cacheStats = () => ({
   entries: memory.size,

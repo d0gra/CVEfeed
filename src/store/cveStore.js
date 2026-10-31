@@ -75,7 +75,9 @@ export async function upsertRecords(items) {
         updateOne: {
           filter: { _id: key },
           update: {
-            $set: { ...rest, lastSeen: now },
+            // Normalise outsideWindow to a boolean: a feed refresh must clear
+            // the flag a prior lookup set, once the CVE enters the window.
+            $set: { ...rest, outsideWindow: rest.outsideWindow === true, lastSeen: now },
             // Kept from the first time we ever saw it, so history is real
             // rather than a side effect of when the last refresh ran.
             $setOnInsert: { firstSeen: now },
@@ -177,6 +179,11 @@ export function buildFilter(query = {}) {
       and.push({ $text: { $search: term } });
     }
   }
+
+  // Records resolved by a direct lookup are kept so they are never searched
+  // upstream twice, but they are not part of the current window: they surface
+  // only when asked for by id, never in the browsable listing or its counts.
+  if (!/^(CVE|GHSA|EUVD)-/i.test(term)) and.push({ outsideWindow: { $ne: true } });
 
   return and.length ? { $and: and } : {};
 }
@@ -311,7 +318,10 @@ export async function listIdsForSitemap(limit = 5000) {
   const col = await collection();
   if (!col) return [];
   return col
-    .find({}, { projection: { _id: 0, cveId: 1, ghsaId: 1, advisoryId: 1, modified: 1, published: 1, exploited: 1 } })
+    .find(
+      { outsideWindow: { $ne: true } },
+      { projection: { _id: 0, cveId: 1, ghsaId: 1, advisoryId: 1, modified: 1, published: 1, exploited: 1 } },
+    )
     .sort({ published: -1 })
     .limit(limit)
     .toArray();

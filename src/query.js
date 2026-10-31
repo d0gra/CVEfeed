@@ -11,7 +11,8 @@ import { SEVERITY_ORDER } from './lib/severity.js';
 import { isCveId, lookupCve } from './lookup.js';
 import { STACK_CATEGORY_IDS } from './stack.js';
 import { attachSignals, MATURITY, pocLinksFor } from './exploits.js';
-import { aggregateStats, findRecordById, queryRecords } from './store/cveStore.js';
+import { aggregateStats, findRecordById, queryRecords, upsertRecords } from './store/cveStore.js';
+import { mongoConfigured } from './lib/mongo.js';
 
 const asList = (value) =>
   String(value ?? '')
@@ -212,6 +213,7 @@ export async function queryFeed(query = {}) {
         lookup = { sources: found.value.sources, lookedUpAt: found.value.lookedUpAt };
         // A looked-up record skipped the feed's enrichment, so it gets it here.
         await attachSignals([found.value.item]);
+        await persistLookup(found.value.item);
         sorted.push(found.value.item);
       }
     } catch (error) {
@@ -239,6 +241,21 @@ export async function queryFeed(query = {}) {
 
 const pocRepos = (item) => (item?.exploitation?.publicPoc ? pocLinksFor(item.cveId) : Promise.resolve([]));
 
+/**
+ * Persist a looked-up record so it is never searched upstream again. Stored
+ * with outsideWindow:true, it stays out of the browsable window but is found
+ * by id - so the next request for it is one database read, not a fan-out to
+ * four sources. A no-op without a reachable database.
+ */
+async function persistLookup(item) {
+  if (!mongoConfigured() || !item) return;
+  try {
+    await upsertRecords([item]);
+  } catch {
+    // Caching the lookup is best-effort; failing it must not fail the request.
+  }
+}
+
 /** The same shape queryFeed has always returned, assembled by the database. */
 async function queryFromStore(feed, query) {
   const [page, stats] = await Promise.all([queryRecords(query), aggregateStats(query)]);
@@ -257,6 +274,7 @@ async function queryFromStore(feed, query) {
       if (found.value.item) {
         lookup = { sources: found.value.sources, lookedUpAt: found.value.lookedUpAt };
         await attachSignals([found.value.item]);
+        await persistLookup(found.value.item);
         items.push(found.value.item);
       }
     } catch (error) {
@@ -315,6 +333,7 @@ async function lookupFallback(id, feed) {
     const found = await lookupCve(id);
     if (found.value.item) {
       await attachSignals([found.value.item]);
+      await persistLookup(found.value.item);
       return {
         item: found.value.item,
         pocRepos: await pocRepos(found.value.item),
