@@ -93,7 +93,14 @@ async function collect() {
   // keeps its page instead of disappearing.
   if (mongoConfigured()) {
     const written = await upsertRecords(items);
-    return { ...meta, items: null, stored: true, fetched: items.length, written: written.written };
+    // Only claim stored mode when the write actually landed. If the database
+    // is unreachable - an un-allowlisted IP, a bad credential, an Atlas
+    // outage - keep the records in memory and serve from there. A database
+    // problem must cost memory, never uptime; the app stays up, just heavier.
+    if (written.ok) {
+      return { ...meta, items: null, stored: true, fetched: items.length, written: written.written };
+    }
+    console.warn('[cvefeed] MongoDB is configured but unreachable; serving from memory');
   }
 
   items.sort(comparators.priority);
@@ -119,8 +126,20 @@ export const comparators = {
   exploitability: (a, b) => maturityOf(a) - maturityOf(b) || (b.epss ?? -1) - (a.epss ?? -1),
 };
 
-export function getFeed({ force = false } = {}) {
-  return cached(FEED_KEY, collect, { force });
+export async function getFeed({ force = false } = {}) {
+  const feed = await cached(FEED_KEY, collect, { force });
+
+  // A snapshot left by a run with MONGODB_URI set holds only metadata, no
+  // records. If Mongo has since been switched off, that snapshot is useless -
+  // refetch so the records come back into memory. The reverse direction (a
+  // memory snapshot while Mongo is now configured) is deliberately NOT forced
+  // here: if the database is unreachable, collect() returns a memory snapshot
+  // on purpose, and forcing on every call would refetch endlessly.
+  if (!force && feed.value.stored && !mongoConfigured()) {
+    return cached(FEED_KEY, collect, { force: true });
+  }
+
+  return feed;
 }
 
 export const feedCacheStatus = () => peek(FEED_KEY);

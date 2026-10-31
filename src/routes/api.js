@@ -2,7 +2,6 @@ import { Router } from 'express';
 import config from '../config.js';
 import { getFeed } from '../aggregate.js';
 import { feedMeta, findRecord, queryFeed, summarize } from '../query.js';
-import { aggregateStats } from '../store/cveStore.js';
 import { enabledSources } from '../sources/index.js';
 import { stackFacets } from '../stack.js';
 import { EXPLOIT_SOURCE_META, getExploitIndex } from '../exploits.js';
@@ -19,12 +18,10 @@ router.get('/feed', async (req, res, next) => {
 
 router.get('/stats', async (_req, res, next) => {
   try {
-    const feed = await getFeed();
-    res.json({
-      meta: feedMeta(feed),
-      stats: feed.value.stored ? await aggregateStats({}) : summarize(feed.value.items),
-      sources: feed.value.sources,
-    });
+    // Routed through queryFeed so it shares the one memory-fallback path: a
+    // dead store degrades here exactly as it does for /api/feed.
+    const feed = await queryFeed({ limit: 1 });
+    res.json({ meta: feed.meta, stats: feed.stats, sources: feed.sources });
   } catch (error) {
     next(error);
   }

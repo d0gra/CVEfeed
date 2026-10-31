@@ -1,5 +1,11 @@
 node_modules/
+
+# Every .env variant, because the one that gets committed is always the one
+# nobody thought to add. The example is the deliberate exception.
 .env
+.env.*
+!.env.example
+
 .cache/
 npm-debug.log*
 .DS_Store

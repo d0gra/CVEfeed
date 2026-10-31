@@ -171,13 +171,26 @@ const feedMeta = (feed) => ({
  * a search names a CVE the current window does not cover.
  */
 export async function queryFeed(query = {}) {
-  const feed = await getFeed();
+  let feed = await getFeed();
 
   // The database answers filtering, sorting, paging and counting. Nothing but
   // this page of records reaches the host.
-  if (feed.value.stored) return queryFromStore(feed, query);
+  if (feed.value.stored) {
+    const result = await queryFromStore(feed, query);
+    if (result) return result;
+    // The store was reachable when this snapshot was written but is not now.
+    // Force a refresh; collect() falls back to memory when the database is
+    // unreachable, so the request below is served from memory rather than
+    // returning an error to the visitor.
+    feed = await getFeed({ force: true });
+    if (feed.value.stored) {
+      // The database recovered between the two calls; try it once more.
+      const retry = await queryFromStore(feed, query);
+      if (retry) return retry;
+    }
+  }
 
-  const filtered = applyFilters(feed.value.items, query);
+  const filtered = applyFilters(feed.value.items ?? [], query);
 
   const sortKey = String(query.sort ?? 'priority');
   const comparator = comparators[sortKey] ?? comparators.priority;
@@ -230,11 +243,9 @@ const pocRepos = (item) => (item?.exploitation?.publicPoc ? pocLinksFor(item.cve
 async function queryFromStore(feed, query) {
   const [page, stats] = await Promise.all([queryRecords(query), aggregateStats(query)]);
 
-  if (!page) {
-    // The database went away mid-flight. Say so rather than reporting an
-    // empty feed, which would read as "nothing is wrong and nothing exists".
-    throw new Error('The vulnerability store is unavailable.');
-  }
+  // The database is unreachable. Return null so the caller can fall back to
+  // memory rather than handing the visitor a 500.
+  if (!page || !stats) return null;
 
   let lookup = null;
   const items = [...page.items];
