@@ -16,15 +16,27 @@ import config from '../config.js';
 let clientPromise = null;
 let lastError = null;
 let connected = false;
+// After a failed connection we stop trying for a cooldown. This is what keeps
+// an unreachable Atlas from being a slow, resource-leaking disaster: without
+// it, every request and every refresh builds a fresh MongoClient, each of
+// which spawns background monitoring threads over a mongodb+srv:// topology,
+// and waits the full server-selection timeout. On a host that counts threads
+// as processes that climbs until the app is killed.
+let retryAfter = 0;
+const COOLDOWN_MS = Math.max(10, Number.parseInt(process.env.MONGO_RETRY_COOLDOWN_SECONDS || '', 10) || 60) * 1000;
 
 export const mongoConfigured = () => Boolean(config.mongoUri);
 
 /**
- * The shared client. Connects once; a failure is remembered so every request
- * does not sit through the same timeout.
+ * The shared client. Connects once and is reused; a failure is remembered and
+ * not retried until the cooldown passes, so an outage costs one timeout a
+ * minute rather than one per request.
  */
 export async function getDb() {
   if (!config.mongoUri) return null;
+  // Inside the cooldown after a failure: fall back to memory immediately,
+  // without constructing a client or waiting on a timeout.
+  if (!clientPromise && Date.now() < retryAfter) return null;
 
   clientPromise ??= (async () => {
     const client = new MongoClient(config.mongoUri, {
@@ -35,19 +47,29 @@ export async function getDb() {
       maxIdleTimeMS: 60_000,
       serverSelectionTimeoutMS: config.mongoTimeoutMs,
       connectTimeoutMS: config.mongoTimeoutMs,
+      // Monitor less often; this app does not need sub-10s topology awareness,
+      // and each heartbeat is work the host is billed for.
+      heartbeatFrequencyMS: 30_000,
       // Keep the wire small; the host's bandwidth is as metered as its memory.
       compressors: ['zlib'],
       zlibCompressionLevel: 6,
     });
 
-    await client.connect();
-    connected = true;
-    return client;
+    try {
+      await client.connect();
+      connected = true;
+      return client;
+    } catch (error) {
+      // Close the failed client, or its monitoring threads leak for the life
+      // of the process - the root of the "too many processes" problem.
+      await client.close().catch(() => {});
+      throw error;
+    }
   })().catch((error) => {
     lastError = error.message;
     connected = false;
-    // Let a later call try again rather than failing for the process's life.
     clientPromise = null;
+    retryAfter = Date.now() + COOLDOWN_MS;
     return null;
   });
 
