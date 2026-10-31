@@ -208,15 +208,20 @@ export async function queryRecords(query = {}) {
   const limit = Math.min(Math.max(int(query.limit, 50), 1), 500);
   const page = Math.max(int(query.page, 1), 1);
 
-  const [items, total] = await Promise.all([
+  const [rows, total] = await Promise.all([
     col
-      .find(filter, { projection: { _id: 0 } })
+      .find(filter)
       .sort(SORTS[sortKey])
       .skip((page - 1) * limit)
       .limit(limit)
       .toArray(),
     col.countDocuments(filter),
   ]);
+
+  // The record's key was stored as _id. Restore it as `key`, because the
+  // dashboard matches a clicked row to its data by item.key - without it,
+  // store-backed rows carry an empty data-key and never expand.
+  const items = rows.map(({ _id, ...rest }) => ({ key: _id, ...rest }));
 
   return { items, total, page, limit, sort: sortKey };
 }
@@ -307,10 +312,12 @@ export async function findRecordById(id) {
   const col = await collection();
   if (!col) return null;
   const upper = String(id).toUpperCase();
-  return col.findOne(
-    { $or: [{ cveId: upper }, { ghsaId: upper }, { euvdId: upper }, { advisoryId: upper }, { _id: upper }] },
-    { projection: { _id: 0 } },
-  );
+  const doc = await col.findOne({
+    $or: [{ cveId: upper }, { ghsaId: upper }, { euvdId: upper }, { advisoryId: upper }, { _id: upper }],
+  });
+  if (!doc) return null;
+  const { _id, ...rest } = doc;
+  return { key: _id, ...rest };
 }
 
 /** Identifiers only, for the sitemap: the documents themselves are not needed. */
