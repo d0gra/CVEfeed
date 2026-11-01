@@ -108,7 +108,49 @@ const asList = (value) =>
     .filter(Boolean);
 
 /** Translate the public query parameters into a Mongo filter. */
-export function buildFilter(query = {}) {
+/**
+ * Escape a user term for use inside a regular expression.
+ *
+ * Without this, a search for "c++" or "a|b" is a malformed pattern at best and
+ * a pathological one at worst - the input comes straight off a query string.
+ */
+const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * The fields worth scanning.
+ *
+ * This list matches what the old in-memory filter searched, which is the
+ * reason the fallback exists at all: the text index covers title, description,
+ * vendor and product, so moving the feed into the database quietly dropped
+ * `stack.subjects` - the project and package names - and the tags and CWEs
+ * along with them. Those are exactly the terms someone types into a search box.
+ */
+function substringClauses(term) {
+  const pattern = new RegExp(escapeRegex(term), 'i');
+  return [
+    { title: pattern },
+    { vendor: pattern },
+    { product: pattern },
+    { 'stack.subjects': pattern },
+    { 'stack.categoryNames': pattern },
+    { tags: pattern },
+    { cwes: pattern },
+    { description: pattern },
+  ];
+}
+
+/**
+ * Whether a substring retry is worth doing for this term.
+ *
+ * Short terms match almost everything, and an identifier is already matched
+ * exactly, so neither gains anything from a scan.
+ */
+export const canRetryAsSubstring = (query = {}) => {
+  const term = String(query.q ?? '').trim();
+  return term.length >= 3 && !/^(CVE|GHSA|EUVD)-/i.test(term);
+};
+
+export function buildFilter(query = {}, { substring = false } = {}) {
   const and = [];
 
   const severities = asList(query.severity).filter((s) => SEVERITY_ORDER.includes(s));
@@ -175,6 +217,16 @@ export function buildFilter(query = {}) {
       and.push({
         $or: [{ cveId: upper }, { ghsaId: upper }, { euvdId: upper }, { advisoryId: upper }, { _id: upper }],
       });
+    } else if (substring) {
+      // The fallback for what a text index cannot do: match inside words.
+      // A package name is the case that matters - "lodash" is a whole word in
+      // "Prototype Pollution in lodash" but not in "node-lodash", and "log4j"
+      // is not a word in "Log4Shell" at all.
+      //
+      // This is a scan, which is what the rest of this file exists to avoid,
+      // so it runs only after the indexed search has come back with nothing,
+      // and only for terms long enough to be worth scanning for.
+      and.push({ $or: substringClauses(term) });
     } else {
       and.push({ $text: { $search: term } });
     }
@@ -203,27 +255,46 @@ export async function queryRecords(query = {}) {
   const col = await collection();
   if (!col) return null;
 
-  const filter = buildFilter(query);
   const sortKey = SORTS[query.sort] ? query.sort : 'priority';
   const limit = Math.min(Math.max(int(query.limit, 50), 1), 500);
   const page = Math.max(int(query.page, 1), 1);
 
-  const [rows, total] = await Promise.all([
-    col
-      .find(filter)
-      .sort(SORTS[sortKey])
-      .skip((page - 1) * limit)
-      .limit(limit)
-      .toArray(),
-    col.countDocuments(filter),
-  ]);
+  const run = async (filter) => {
+    const [rows, total] = await Promise.all([
+      col
+        .find(filter)
+        .sort(SORTS[sortKey])
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .toArray(),
+      col.countDocuments(filter),
+    ]);
+    return { rows, total };
+  };
+
+  let matchedBy = 'words';
+  let { rows, total } = await run(buildFilter(query));
+
+  // A word search that found nothing is retried as a substring search. This is
+  // the difference between a search box that works the way people expect and
+  // one that answers "nothing matches" for "lodash" because the advisory says
+  // "lodash" inside a longer token, or for "log4j" because the title says
+  // "Log4Shell". The indexed search runs first precisely so the scan is the
+  // exception rather than the rule.
+  if (total === 0 && canRetryAsSubstring(query)) {
+    const retry = await run(buildFilter(query, { substring: true }));
+    if (retry.total > 0) {
+      ({ rows, total } = retry);
+      matchedBy = 'substring';
+    }
+  }
 
   // The record's key was stored as _id. Restore it as `key`, because the
   // dashboard matches a clicked row to its data by item.key - without it,
   // store-backed rows carry an empty data-key and never expand.
   const items = rows.map(({ _id, ...rest }) => ({ key: _id, ...rest }));
 
-  return { items, total, page, limit, sort: sortKey };
+  return { items, total, page, limit, sort: sortKey, matchedBy };
 }
 
 /**
@@ -233,11 +304,13 @@ export async function queryRecords(query = {}) {
  * by scanning the collection into the host would put back exactly what moving
  * it was meant to remove.
  */
-export async function aggregateStats(query = {}) {
+export async function aggregateStats(query = {}, { substring = false } = {}) {
   const col = await collection();
   if (!col) return null;
 
-  const filter = buildFilter(query);
+  // The counts have to be computed over whichever filter actually produced the
+  // list, or the facets would describe a different result set than the rows.
+  const filter = buildFilter(query, { substring });
   const [result] = await col
     .aggregate([
       { $match: filter },
@@ -320,6 +393,41 @@ export async function findRecordById(id) {
   return { key: _id, ...rest };
 }
 
+/**
+ * A batch of records by CVE id, projected down to what a dependency sweep
+ * needs.
+ *
+ * The sweep resolves a list of advisories at once and wants severity, score
+ * and exploit signals for each; asking one at a time would be one round trip
+ * per dependency, which is the shape of request this collection exists to
+ * avoid.
+ */
+export async function findRecordsByIds(cveIds) {
+  const col = await collection();
+  if (!col) return null;
+
+  const ids = [...new Set((cveIds ?? []).filter(Boolean).map((id) => String(id).toUpperCase()))];
+  if (!ids.length) return new Map();
+
+  const out = new Map();
+  const CHUNK = 500;
+
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const cursor = col.find(
+      { cveId: { $in: ids.slice(i, i + CHUNK) } },
+      {
+        projection: {
+          cveId: 1, title: 1, severity: 1, score: 1, epss: 1, exploited: 1,
+          published: 1, modified: 1, url: 1, cwes: 1, vector: 1, stack: 1,
+        },
+      },
+    );
+    for await (const { _id, ...rest } of cursor) out.set(rest.cveId, { key: _id, ...rest });
+  }
+
+  return out;
+}
+
 /** Identifiers only, for the sitemap: the documents themselves are not needed. */
 export async function listIdsForSitemap(limit = 5000) {
   const col = await collection();
@@ -345,6 +453,8 @@ export default {
   queryRecords,
   aggregateStats,
   findRecordById,
+  findRecordsByIds,
+  canRetryAsSubstring,
   listIdsForSitemap,
   storeReady,
   storeCounts,

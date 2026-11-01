@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, json } from 'express';
 import config from '../config.js';
 import { getFeed } from '../aggregate.js';
 import { feedMeta, findRecord, queryFeed, summarize } from '../query.js';
@@ -15,6 +15,9 @@ import {
   submitPoc,
 } from '../store/pocStore.js';
 import { isCveId } from '../lookup.js';
+import { sweepDependencies } from '../deps.js';
+import { MANIFEST_TYPE_IDS, describeManifest, parseManifest } from '../lib/manifests.js';
+import { createLimiter } from '../lib/ratelimit.js';
 
 const router = Router();
 
@@ -149,6 +152,57 @@ function requireModerator(req, res) {
   }
   return true;
 }
+
+/**
+ * A dependency sweep over HTTP, for callers that are not speaking MCP - CI, a
+ * script, curl.
+ *
+ * Two things are different about this route. It takes a body far larger than
+ * anything else here, because a real package-lock.json is hundreds of
+ * kilobytes, so it gets its own JSON parser rather than raising the global
+ * cap. And it is the only request that can fan out to hundreds of upstream
+ * lookups, so it gets its own, much smaller, rate budget.
+ */
+const depsLimiter = createLimiter({ windowMs: 3_600_000, max: config.depsRateMax });
+const depsBody = json({ limit: config.depsMaxManifestBytes });
+
+router.post('/dependencies/check', depsLimiter, depsBody, async (req, res, next) => {
+  try {
+    const body = req.body ?? {};
+    let packages = Array.isArray(body.packages) ? body.packages : [];
+    let manifest;
+
+    const text = typeof body.manifest === 'string' ? body.manifest : '';
+    if (text.trim()) {
+      const parsed = parseManifest(text, { type: body.manifestType, max: config.depsMaxPackages });
+      if (parsed.error && !packages.length) {
+        return res.status(400).json({ error: parsed.error, manifestTypes: MANIFEST_TYPE_IDS });
+      }
+      packages = [...packages, ...parsed.packages];
+      manifest = describeManifest(parsed, { max: config.depsMaxPackages });
+    }
+
+    if (!packages.length) {
+      return res.status(400).json({
+        error: 'Pass packages as [{ name, ecosystem, version }], or manifest as the text of a lockfile.',
+        manifestTypes: MANIFEST_TYPE_IDS,
+      });
+    }
+
+    const sweep = await sweepDependencies({
+      packages,
+      onlyExploitable: body.onlyExploitable === true || req.query.onlyExploitable === '1',
+      includeClean: body.includeClean === true || req.query.includeClean === '1',
+    });
+
+    // A sweep that could not reach OSV is a failed check, not an empty one.
+    if (sweep.error && !sweep.packages) return res.status(502).json(sweep);
+
+    res.json({ ...(manifest ? { manifest } : {}), ...sweep });
+  } catch (error) {
+    next(error);
+  }
+});
 
 router.get('/pocs/pending', async (req, res, next) => {
   if (!requireModerator(req, res)) return;

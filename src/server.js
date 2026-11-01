@@ -53,7 +53,13 @@ export function createApp() {
   // Correct client IPs and protocol behind Hostinger's reverse proxy.
   app.set('trust proxy', true);
   app.use(compression());
-  app.use(express.json({ limit: '64kb' }));
+  // 64kb is plenty for every request but one: a dependency sweep can carry a
+  // whole package-lock.json. That route parses its own body with its own cap,
+  // so this parser has to stand aside rather than rejecting it at 64kb first.
+  const parseJson = express.json({ limit: '64kb' });
+  app.use((req, res, next) =>
+    req.path === '/api/dependencies/check' ? next() : parseJson(req, res, next),
+  );
 
   // Per-IP rate limiting. Static assets and /healthz are exempt (a single page
   // load pulls several assets, and health checks must never be throttled).

@@ -258,11 +258,19 @@ async function persistLookup(item) {
 
 /** The same shape queryFeed has always returned, assembled by the database. */
 async function queryFromStore(feed, query) {
-  const [page, stats] = await Promise.all([queryRecords(query), aggregateStats(query)]);
+  // Computed together, on the assumption the indexed search matches - which is
+  // the common case. When it does not and the store falls back to a substring
+  // search, the counts have to be recomputed over that same filter, or the
+  // facets would describe a result set the visitor is not looking at.
+  let [page, stats] = await Promise.all([queryRecords(query), aggregateStats(query)]);
 
   // The database is unreachable. Return null so the caller can fall back to
   // memory rather than handing the visitor a 500.
   if (!page || !stats) return null;
+
+  if (page.matchedBy === 'substring') {
+    stats = (await aggregateStats(query, { substring: true })) ?? stats;
+  }
 
   let lookup = null;
   const items = [...page.items];
@@ -286,6 +294,9 @@ async function queryFromStore(feed, query) {
     meta: {
       ...feedMeta(feed),
       sort: page.sort,
+      // How the term was matched, so the dashboard can say so: a substring
+      // match means the indexed word search found nothing.
+      ...(page.matchedBy && page.matchedBy !== 'words' ? { matchedBy: page.matchedBy } : {}),
       total: lookup ? items.length : page.total,
       totalUnfiltered: feed.value.fetched ?? stats.total,
       page: page.page,

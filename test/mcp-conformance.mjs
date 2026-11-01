@@ -55,7 +55,9 @@ check('the official client completes the handshake', async () => {
 check('tools/list returns usable schemas', async () => {
   ({ tools } = await client.listTools());
   const names = tools.map((t) => t.name).sort();
-  assert.deepEqual(names, ['feed_status', 'get_cve', 'get_exploits', 'list_exploited', 'search_cves']);
+  assert.deepEqual(names, [
+    'check_dependencies', 'feed_status', 'get_cve', 'get_exploits', 'list_exploited', 'search_cves',
+  ]);
   for (const tool of tools) {
     assert.ok(tool.description?.length > 40, `${tool.name} needs a real description`);
     assert.equal(tool.inputSchema.type, 'object', `${tool.name} schema must be an object`);
@@ -169,6 +171,52 @@ check('feed_status reports which storage is serving', async () => {
   const body = parse(await client.callTool({ name: 'feed_status', arguments: {} }));
   assert.ok(['database', 'memory'].includes(body.storage.mode), `got ${body.storage?.mode}`);
   assert.ok(body.coverage, 'coverage must be described so an empty result can be read correctly');
+});
+
+check('check_dependencies answers by coordinate, not by name', async () => {
+  const body = parse(
+    await client.callTool({
+      name: 'check_dependencies',
+      arguments: { packages: [{ name: 'lodash', ecosystem: 'npm', version: '4.17.15' }] },
+    }),
+  );
+  assert.equal(body.checked, 1);
+  assert.equal(body.vulnerablePackages, 1);
+  const [pkg] = body.packages;
+  assert.equal(pkg.package, 'lodash');
+  // The two things free-text search cannot produce: the advisory for this
+  // exact version, and what to upgrade to.
+  assert.ok(pkg.vulnerabilities.length > 0);
+  assert.ok(pkg.vulnerabilities.some((v) => v.fixedIn?.length));
+});
+
+check('check_dependencies parses a pasted lockfile', async () => {
+  const lock = JSON.stringify({
+    lockfileVersion: 3,
+    packages: { 'node_modules/minimist': { version: '1.2.0' } },
+  });
+  const body = parse(await client.callTool({ name: 'check_dependencies', arguments: { manifest: lock } }));
+  assert.equal(body.manifest.format, 'package-lock.json');
+  assert.equal(body.manifest.exactVersions, true);
+  assert.equal(body.vulnerablePackages, 1);
+});
+
+check('check_dependencies refuses an unreadable manifest rather than answering', async () => {
+  // The failure that matters: an empty sweep reads as "you are fine".
+  const res = await client.callTool({ name: 'check_dependencies', arguments: { manifest: 'not a manifest' } });
+  assert.equal(res.isError, true);
+  assert.match(res.content[0].text, /manifestType|format/i);
+});
+
+check('check_dependencies rejects a call with nothing to check', async () => {
+  const res = await client.callTool({ name: 'check_dependencies', arguments: {} });
+  assert.equal(res.isError, true);
+});
+
+check('the instructions point dependency questions at the right tool', async () => {
+  const text = client.getInstructions() ?? '';
+  assert.match(text, /check_dependencies/);
+  assert.match(text, /not search_cves/i);
 });
 
 check('an unknown tool is rejected', async () => {

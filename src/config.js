@@ -54,6 +54,18 @@ export const config = {
   // budget even when every lookup spends one request against it. 0 disables.
   lookupBurst: clamp(int(process.env.LOOKUP_BURST, 15), 0, 10_000),
   lookupRefillPerSec: Number.parseFloat(process.env.LOOKUP_REFILL_PER_SEC || '0.2') || 0.2,
+  // Dependency sweeps. One batched OSV query covers up to a thousand
+  // coordinates, so the cap here is about the advisory detail fan-out that
+  // follows it rather than about the batch itself.
+  depsMaxPackages: clamp(int(process.env.DEPS_MAX_PACKAGES, 600), 1, 2000),
+  depsMaxAdvisories: clamp(int(process.env.DEPS_MAX_ADVISORIES, 250), 1, 2000),
+  // Sweeps per IP per hour. The expensive request on the service, so it gets
+  // its own budget rather than sharing the general API allowance - but loose
+  // enough that a CI job checking its lockfile on every commit fits inside it.
+  depsRateMax: clamp(int(process.env.DEPS_RATE_MAX, 60), 0, 10_000),
+  // Largest manifest accepted. A package-lock.json for a real project runs to
+  // hundreds of kilobytes, well past the 64kb cap on everything else.
+  depsMaxManifestBytes: clamp(int(process.env.DEPS_MAX_MANIFEST_KB, 1024), 16, 8192) * 1024,
   // Community PoC submissions.
   // Submissions are held for review and never shown publicly until approved;
   // auto-approve is for a trusted, private instance only and is off by default.

@@ -10,6 +10,11 @@ import { STACK_CATEGORIES } from '../stack.js';
 
 const TOOLS = [
   {
+    name: 'check_dependencies',
+    line: 'Check a project\u2019s dependencies by exact version and say which findings anyone could actually exploit. Takes coordinates, or a pasted lockfile it parses for you \u2014 npm, PyPI, Go, crates.io, RubyGems, Packagist.',
+    example: '{ "manifest": "<your package-lock.json>", "onlyExploitable": true }',
+  },
+  {
     name: 'search_cves',
     line: 'Find vulnerabilities by severity, CVSS, EPSS, exploitation status, how reachable an exploit is, AI-stack component, recency or free text. Paginated.',
     example: '{ "stack": ["mcp"], "maturity": "public-exploit", "limit": 10 }',
@@ -52,11 +57,13 @@ export function agentsPage({ origin, canonical, assetVersion, stats }) {
   const body = `<article class="doc doc-wide">
     <nav class="crumbs"><a href="/">Feed</a> <span>/</span> <span>For agents</span></nav>
 
-    <h1>Give your agents knowledge of CVEs — and the exploits for them</h1>
-    <p class="lede">Models know vulnerabilities up to their training cut-off, and nothing after it.
-    Point an agent at this endpoint and it can answer what shipped this morning, whether anyone has
-    actually written an exploit for it, and whether that exploit is sitting in Metasploit or on
-    GitHub right now.</p>
+    <h1>Give your agent the instincts of an elite hacker</h1>
+    <p class="lede">A model knows vulnerabilities up to its training cut-off and nothing after it,
+    which makes it a junior analyst reciting last year’s news. Connect this endpoint and your
+    agent — pentest, red team, triage, or the one reviewing your pull requests — gets what
+    a good operator actually carries in their head: what landed overnight, whether anyone has
+    written working code for it, where that code is, and which of the things you ship it lands on.</p>
+    <p class="lede">One command. No account, no key.</p>
 
     <section class="hero-add">
       <h2>Add it</h2>
@@ -65,49 +72,75 @@ export function agentsPage({ origin, canonical, assetVersion, stats }) {
     </section>
 
     <section class="block">
-      <h2>What your agent can answer</h2>
+      <h2>What it stops having to guess at</h2>
       <ul class="earn-list">
-        <li><strong>“Is anything in our stack being exploited?”</strong>
-          <p>Ask for the AI stack and the exploited filter and it comes back with the handful that
-          matter, not a thousand CVEs to read.</p></li>
-        <li><strong>“Can this one actually be exploited, and with what?”</strong>
-          <p><code>get_exploits</code> answers in one call: the maturity, and the links — the
-          Metasploit module, the Exploit-DB entry, the PoC repositories ranked by stars.</p></li>
-        <li><strong>“What landed overnight that I should care about?”</strong>
-          <p>Newest first, with CVSS, EPSS and exploit availability already attached, so the agent
-          can triage instead of fetching five sources itself.</p></li>
-        <li><strong>“Tell me everything about CVE-2021-44228.”</strong>
-          <p>Any published CVE resolves, however old. If it is not stored yet it is fetched live
-          from the registers and kept, so the second ask is instant.</p></li>
+        <li><strong>“What can I actually hit on this target?”</strong>
+          <p>Not a list of CVEs with scores — the subset somebody has already written code for,
+          with the Metasploit module, the Exploit-DB entry and the proof-of-concept repositories
+          ranked by stars. The difference between knowing a flaw exists and being able to
+          demonstrate it.</p></li>
+        <li><strong>“Are any of our dependencies vulnerable — and does it matter?”</strong>
+          <p>Paste a lockfile. Every package is resolved at its exact installed version, then
+          ordered by whether exploit code exists, so the answer is a worklist of four rather than a
+          wall of forty. The judgement call a scanner leaves to you.</p></li>
+        <li><strong>“What landed overnight that changes my plan?”</strong>
+          <p>Newest first, with CVSS, EPSS and exploit availability already attached. Your agent
+          triages instead of fetching five sources and guessing which to believe.</p></li>
+        <li><strong>“Is anything in our AI stack being exploited right now?”</strong>
+          <p>Inference servers, agent frameworks, MCP servers, vector stores — classified as a
+          facet of their own, because that is the surface nobody has finished picking over.</p></li>
       </ul>
     </section>
 
     <section class="block">
-      <h2>Five tools</h2>
+      <h2>Where the edge actually comes from</h2>
+      <p>What separates a good operator from a scanner is not knowing more CVEs. It is knowing which
+      of them is worth an afternoon. A 7.5 with a ready-made module is a worse day than a 9.8 nobody
+      has written anything for, and no severity score tells you which is which.</p>
+      <p>Every record here carries that judgement as data: whether exploitation has been
+      <strong>observed in the wild</strong>, whether it is <strong>weaponized</strong> into a
+      Metasploit module, whether a <strong>public exploit</strong> is archived and downloadable,
+      whether <strong>proof-of-concept</strong> code is published, and whether a Nuclei template
+      means it is being scanned for at internet scale. Sort by that and your agent prioritises the
+      way someone experienced would.</p>
+      <p class="stat-line"><strong>${'${stats?.withExploitSignal ?? 0}'}</strong> of the records currently stored
+      carry at least one exploit signal.</p>
+    </section>
+
+    <section class="block">
+      <h2>Six tools</h2>
       <ul class="tools">${tools}</ul>
     </section>
 
     <section class="block">
-      <h2>Exploit intelligence, not just advisories</h2>
-      <p>Most feeds stop at “here is a CVE with a CVSS score”. A score does not tell you whether
-      someone can run an attack this afternoon. Every record here also carries whether an exploit
-      exists and how reachable it is:</p>
+      <h2>Dependencies, by coordinate rather than by keyword</h2>
+      <p>Free-text search is the wrong tool for “is my project affected”, and it is worth
+      being plain about why. Searching <code>lodash</code> matches advisories whose <em>text</em>
+      contains that word — which is neither the set of advisories affecting the npm package
+      lodash nor a subset of it. It has no ecosystem, so npm <code>zip</code> and crates.io
+      <code>zip</code> look like the same thing when they are unrelated software. And it has no
+      versions, so 4.17.15 and 4.17.21 are indistinguishable when only one of them is vulnerable.</p>
       <div class="pair">
         <div>
-          <h3>Four rungs</h3>
-          <p><strong>Observed</strong> in the wild (CISA KEV) · <strong>weaponized</strong>, meaning a
-          Metasploit module · a <strong>public exploit</strong> archived on Exploit-DB · or
-          <strong>proof-of-concept</strong> code on GitHub. A Nuclei template means it is scanned for
-          at internet scale.</p>
+          <h3>So it resolves coordinates</h3>
+          <p><code>check_dependencies</code> takes an ecosystem, a name and an installed version and
+          matches affected version ranges through <a href="https://osv.dev" rel="noopener"
+          target="_blank">OSV.dev</a>, the database the ecosystems themselves publish into. Paste a
+          package-lock.json, yarn.lock, requirements.txt, poetry.lock, go.mod, Cargo.lock,
+          Gemfile.lock or composer.lock and it is parsed for you.</p>
         </div>
         <div>
-          <h3>Why it reorders your work</h3>
-          <p>A 7.5 with a ready-made module is a worse afternoon than a 9.8 nobody has written
-          anything for. Sorting by exploitability puts that first, and
-          <strong>${stats?.withExploitSignal ?? 0}</strong> of the records currently stored carry at
-          least one exploit signal.</p>
+          <h3>And then adds what audit tools cannot</h3>
+          <p><code>npm audit</code> gives you forty advisories sorted by a severity label. This adds
+          whether a Metasploit module, an archived exploit or public proof-of-concept code exists for
+          each one, sorts by that, and returns <code>patchFirst</code> — what to upgrade, in
+          order, and why. A moderate with a working exploit outranks a critical nobody has written
+          anything for.</p>
         </div>
       </div>
+      <pre><code>check_dependencies { "manifest": "&lt;package-lock.json&gt;", "onlyExploitable": true }</code></pre>
+      <p class="aside">Repeat sweeps are cached, so re-checking the same lockfile in CI costs
+      almost nothing.</p>
     </section>
 
     <section class="block">
@@ -147,6 +180,17 @@ export function agentsPage({ origin, canonical, assetVersion, stats }) {
 curl '${escapeHtml(origin)}/api/cve/CVE-2021-44228'</code></pre>
     </section>
 
+    <section class="callout callout-exploit">
+      <h2>Authorised testing only</h2>
+      <p>This is offensive capability pointed at defence: knowing what can be exploited is how you
+      decide what to fix first, and how an engagement proves a finding rather than asserting it.
+      Point it at systems you own or have explicit, written permission to test, and nothing else.
+      Unauthorised access to computer systems is a crime in most jurisdictions.</p>
+      <p class="aside">Advisory text and community proofs of concept are untrusted third-party
+      content. Every result says so, and reference URLs are listed but never fetched. See the
+      <a href="/terms">terms</a>.</p>
+    </section>
+
     <section class="block">
       <h2>How it is built</h2>
       <p>The protocol is implemented directly rather than through the official SDK, which pulls
@@ -161,9 +205,9 @@ curl '${escapeHtml(origin)}/api/cve/CVE-2021-44228'</code></pre>
   </article>`;
 
   return layout({
-    title: 'Give your agents CVE and exploit knowledge | CVE Feed',
+    title: 'Give your agent the instincts of an elite hacker | CVE Feed',
     description:
-      'An MCP endpoint that gives your agent live knowledge of vulnerabilities and the exploits that exist for them - Metasploit, Exploit-DB, public PoCs - with an AI-stack filter and no API key.',
+      'An MCP endpoint that gives a pentest, red-team or triage agent live knowledge of vulnerabilities and the exploits that exist for them - Metasploit modules, Exploit-DB entries, public PoCs - plus a dependency check by exact version. No account, no API key.',
     canonical,
     body,
     current: '/mcp',
@@ -178,7 +222,7 @@ curl '${escapeHtml(origin)}/api/cve/CVE-2021-44228'</code></pre>
         operatingSystem: 'Any',
         url: canonical,
         description:
-          'Model Context Protocol server exposing merged CVE data from NVD, CISA KEV, GitHub Advisories, EUVD and CISA advisories, with an AI and agent stack filter.',
+          'Model Context Protocol server exposing merged CVE data from NVD, CISA KEV, GitHub Advisories, EUVD and CISA advisories, enriched with exploit availability and a version-aware dependency check, with an AI and agent stack filter.',
         offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
       },
     ],

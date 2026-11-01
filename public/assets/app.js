@@ -29,6 +29,8 @@ const dom = {
   sources: el('sources'),
   feed: el('feed'),
   empty: el('empty'),
+  emptyDeps: el('empty-deps'),
+  emptyTerm: el('empty-term'),
   skeletons: el('skeletons'),
   pager: el('pager'),
   results: el('results'),
@@ -567,6 +569,18 @@ function renderFeed(payload) {
   dom.feed.innerHTML = items.map(cardHtml).join('');
   dom.empty.hidden = items.length > 0;
 
+  // A term that found nothing and looks like a package name is almost always
+  // someone asking "is this dependency vulnerable", which this feed's window
+  // cannot answer and a search cannot answer at all - it has no versions. So
+  // point at the check that can rather than leaving them at "nothing matches".
+  if (dom.emptyDeps) {
+    const term = (meta.q ?? dom.q.value ?? '').trim();
+    const looksLikePackage = term.length > 1 && /^[@a-z0-9][a-z0-9._/@-]*$/i.test(term) && !/^(CVE|GHSA|EUVD)-/i.test(term);
+    const show = items.length === 0 && looksLikePackage;
+    dom.emptyDeps.hidden = !show;
+    if (show && dom.emptyTerm) dom.emptyTerm.textContent = term;
+  }
+
   const from = (meta.page - 1) * meta.limit + 1;
   const to = (meta.page - 1) * meta.limit + items.length;
   const noun = meta.total === 1 ? 'disclosure' : 'disclosures';
@@ -575,7 +589,7 @@ function renderFeed(payload) {
     ? `${meta.total.toLocaleString()} ${noun}`
     : 'Nothing matching';
   dom.resultsNote.textContent = meta.total
-    ? `Showing ${from}–${to} · ${meta.sort}`
+    ? `Showing ${from}–${to} · ${meta.sort}${meta.matchedBy === 'substring' ? ' · partial-word match' : ''}`
     : `${meta.totalUnfiltered.toLocaleString()} in the window`;
 
   renderPager(meta);

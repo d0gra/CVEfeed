@@ -47,7 +47,8 @@
   <p class="crosslinks">
     <a href="/ai-stack">Browse the AI stack</a>
     <a href="/exploited">What is being exploited</a>
-    <a href="/mcp">Use it from an agent</a>
+    <a href="/dependencies">Check your dependencies</a>
+    <a href="/mcp">Arm your agent</a>
     <a href="/earn">Earn by submitting a PoC</a>
   </p>
 
@@ -128,6 +129,10 @@
     <div class="empty" id="empty" hidden>
       <p class="empty-lead">Nothing matches.</p>
       <p>Widen the date range, or search a CVE identifier directly — those are looked up at the source even when they fall outside the current window.</p>
+      <p id="empty-deps" hidden>Looking for a package? This feed covers current disclosures, so an
+      older advisory against <strong id="empty-term"></strong> may not be in it — and a search
+      cannot tell which <em>version</em> is affected anyway.
+      <a href="/dependencies">Check it by version instead</a>.</p>
     </div>
 
     <div class="skeletons" id="skeletons"></div>

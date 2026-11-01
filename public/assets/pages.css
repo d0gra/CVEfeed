@@ -297,3 +297,184 @@
 .mod-item { border-top: 1px solid var(--hair); padding: 16px 0; }
 .mod-head { font-size: 14px; margin-bottom: 8px; }
 .mod-actions { display: flex; gap: 12px; margin-top: 10px; }
+
+/* ---------- dependency check ---------- */
+/* The one page here that is interactive, so it needs form and result styling
+   the reading pages do not. Tokens still come from styles.css. */
+
+.dep-form { margin: 26px 0 0; }
+.dep-label {
+  display: block;
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 8px;
+}
+.dep-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink);
+  background: var(--paper-raised);
+  border: 1px solid var(--hair-strong);
+  border-radius: 3px;
+  padding: 14px 15px;
+  resize: vertical;
+  tab-size: 2;
+}
+.dep-input:focus { outline: none; border-color: var(--accent); }
+.dep-input::placeholder { color: var(--ink-faint); }
+
+.dep-controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.dep-go {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--paper);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 9px 18px;
+  cursor: pointer;
+}
+.dep-go:hover { filter: brightness(1.08); }
+.dep-go:disabled { opacity: 0.55; cursor: progress; }
+.dep-detected { font-family: var(--mono); font-size: 11.5px; color: var(--stack-ink); }
+.dep-detected.is-unknown { color: var(--ink-faint); }
+.dep-privacy { font-size: 12px; color: var(--ink-faint); margin: 12px 0 0; line-height: 1.6; }
+
+.dep-results { margin: 34px 0 0; }
+.dep-working { font-size: 13.5px; color: var(--ink-soft); }
+.dep-error {
+  font-size: 13.5px;
+  color: var(--critical);
+  border-left: 2px solid var(--critical);
+  padding: 10px 0 10px 14px;
+  margin: 0;
+}
+.dep-manifest { font-size: 12.5px; color: var(--ink-soft); margin: 0 0 14px; }
+.dep-manifest strong { font-family: var(--mono); font-weight: 500; color: var(--ink); }
+.dep-approx { font-size: 12.5px; color: var(--medium); line-height: 1.6; margin: 0 0 14px; }
+
+.dep-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 1px;
+  background: var(--hair);
+  border: 1px solid var(--hair);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 30px;
+}
+.dep-stat { background: var(--paper-raised); padding: 14px 16px; }
+.dep-stat-num {
+  display: block;
+  font-family: var(--mono);
+  font-size: 22px;
+  line-height: 1.1;
+  color: var(--ink);
+}
+.dep-stat-label { display: block; font-size: 11.5px; color: var(--ink-faint); margin-top: 5px; }
+.dep-stat.is-bad .dep-stat-num { color: var(--critical); }
+.dep-stat.is-warn .dep-stat-num { color: var(--high); }
+.dep-stat.is-ok .dep-stat-num { color: var(--low); }
+
+/* The worklist. Deliberately the loudest thing on the page: it is the answer,
+   and the per-package detail below it is the supporting material. */
+.dep-patch {
+  border: 1px solid var(--high);
+  border-radius: 3px;
+  padding: 20px 22px 6px;
+  margin-bottom: 32px;
+}
+.dep-patch h2 { margin: 0 0 4px; color: var(--high); border: 0; padding: 0; }
+.dep-patch-why { font-size: 12.5px; color: var(--ink-faint); margin: 0 0 16px; }
+.dep-patch-list { margin: 0; padding-left: 20px; }
+.dep-patch-list li { margin-bottom: 15px; }
+.dep-patch-pkg { font-family: var(--mono); font-size: 13px; color: var(--ink); }
+.dep-arrow { margin: 0 8px; color: var(--ink-faint); }
+.dep-patch-to { font-family: var(--mono); font-size: 13px; color: var(--low); }
+.dep-patch-reason { font-size: 12.5px; color: var(--ink-soft); margin: 5px 0 0; line-height: 1.55; }
+
+.dep-pkgs { display: grid; gap: 1px; background: var(--hair); border-top: 1px solid var(--hair); }
+.dep-pkg { background: var(--paper); padding: 20px 0 22px; border-left: 2px solid transparent; padding-left: 16px; }
+.dep-pkg[data-maturity="observed"] { border-left-color: var(--critical); }
+.dep-pkg[data-maturity="weaponized"] { border-left-color: var(--critical); }
+.dep-pkg[data-maturity="public-exploit"] { border-left-color: var(--high); }
+.dep-pkg[data-maturity="proof-of-concept"] { border-left-color: var(--medium); }
+
+.dep-pkg-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+.dep-pkg-name { margin: 0; }
+.dep-pkg-name code { font-family: var(--mono); font-size: 15px; color: var(--ink); }
+.dep-eco {
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--stack-ink);
+}
+.dep-count { font-size: 11.5px; color: var(--ink-faint); margin-left: auto; }
+
+.dep-vulns { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 16px; }
+.dep-vuln { padding-left: 0; }
+.dep-vuln-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.dep-vuln-id {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--accent-ink);
+  border-bottom: 1px solid var(--hair-strong);
+}
+.dep-sev {
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 2px;
+  border: 1px solid currentColor;
+}
+.dep-sev.is-critical { color: var(--critical); }
+.dep-sev.is-high { color: var(--high); }
+.dep-sev.is-medium { color: var(--medium); }
+.dep-sev.is-low { color: var(--low); }
+.dep-sev.is-none, .dep-sev.is-unrated { color: var(--unscored); }
+.dep-cvss, .dep-epss { font-family: var(--mono); font-size: 11.5px; color: var(--ink-faint); }
+.dep-tag {
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 2px;
+}
+.dep-tag.is-bad { color: var(--paper); background: var(--critical); }
+.dep-tag.is-warn { color: var(--high); border: 1px solid var(--high); }
+
+.dep-vuln-summary { font-size: 13.5px; color: var(--ink-soft); margin: 7px 0 0; line-height: 1.6; }
+.dep-vuln-facts { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 8px; font-size: 12px; }
+.dep-fix { color: var(--low); font-family: var(--mono); }
+.dep-nofix { color: var(--high); }
+.dep-evidence { color: var(--ink-faint); }
+.dep-links { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+.dep-link { font-size: 12px; color: var(--accent-ink); }
+
+.dep-clean { border-left: 2px solid var(--low); padding: 14px 0 14px 16px; }
+.dep-clean-lead { font-size: 15px; color: var(--low); margin: 0 0 8px; }
+.dep-clean p { font-size: 13px; color: var(--ink-faint); margin: 0; line-height: 1.6; }
+.dep-footnote { font-size: 12.5px; color: var(--ink-faint); margin: 20px 0 0; }
+
+.dep-formats { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
+.dep-formats li { display: flex; align-items: baseline; gap: 10px; font-size: 13px; }
+.dep-formats code { font-family: var(--mono); font-size: 12.5px; color: var(--ink); }
+.dep-warn { font-size: 11px; color: var(--medium); }
+
+@media (max-width: 620px) {
+  .dep-count { margin-left: 0; }
+  .dep-patch { padding: 16px 16px 4px; }
+}

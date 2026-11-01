@@ -13,13 +13,14 @@
     "warm": "node scripts/warm-cache.js",
     "test:mcp": "node test/mcp-conformance.mjs",
     "test:exploits": "node test/exploit-resilience.mjs",
-    "test": "node test/cache-bounds.mjs && node test/ratelimit.mjs && node test/poc.mjs && node test/exploit-resilience.mjs && node test/store.mjs && node test/mcp-conformance.mjs",
+    "test": "node test/cache-bounds.mjs && node test/ratelimit.mjs && node test/poc.mjs && node test/exploit-resilience.mjs && node test/store.mjs && node test/deps.mjs && node test/mcp-conformance.mjs",
     "test:cache": "node test/cache-bounds.mjs",
     "refresh": "node scripts/refresh.js",
     "refresh:all": "node scripts/refresh.js --exploits",
     "test:store": "node test/store.mjs",
     "test:ratelimit": "node test/ratelimit.mjs",
-    "test:poc": "node test/poc.mjs"
+    "test:poc": "node test/poc.mjs",
+    "test:deps": "node test/deps.mjs"
   },
   "keywords": [
     "cve",

@@ -92,6 +92,54 @@ try {
   const poc = await store.queryRecords({ exploit: 'poc', limit: 50 });
   check('exploit signals filter', poc.total === 1);
 
+  // --- search ---
+  const words = await store.queryRecords({ q: 'widget', limit: 50 });
+  check('the indexed word search matches', words.total === 3 && words.matchedBy === 'words');
+
+  // The regression that moving to the database introduced: a text index
+  // matches whole words, so a term inside one found nothing at all.
+  const inside = await store.queryRecords({ q: 'nferenc', limit: 50 });
+  check(
+    'a term inside a word falls back to a substring match',
+    inside.total === 1 && inside.matchedBy === 'substring',
+    `total=${inside.total} matchedBy=${inside.matchedBy}`,
+  );
+
+  // Project and package names live in stack.subjects, which the text index
+  // does not cover at all - and they are what people actually type.
+  const subject = await store.queryRecords({ q: 'vLL', limit: 50 });
+  check(
+    'a project name is found by substring',
+    subject.total === 1 && subject.items[0].cveId === 'CVE-2026-0003',
+    `total=${subject.total}`,
+  );
+
+  const cwe = await store.queryRecords({ q: 'CWE-94', limit: 50 });
+  check('a CWE is searchable', cwe.total === 3, `total=${cwe.total}`);
+
+  const nothing = await store.queryRecords({ q: 'zzzznotpresent', limit: 50 });
+  check('a term matching nothing still matches nothing', nothing.total === 0);
+
+  // A term off a query string goes into a regular expression, so it has to be
+  // escaped - unescaped, this one is a malformed pattern and throws.
+  let regexSafe = true;
+  try {
+    await store.queryRecords({ q: 'c++ (unterminated', limit: 5 });
+  } catch {
+    regexSafe = false;
+  }
+  check('a term with regex metacharacters is escaped, not executed', regexSafe);
+
+  const shortTerm = await store.queryRecords({ q: 'zz', limit: 5 });
+  check('a term too short to scan for is not retried', shortTerm.matchedBy === 'words');
+
+  const substringStats = await store.aggregateStats({ q: 'nferenc' }, { substring: true });
+  check(
+    'facet counts can be computed over the substring filter',
+    substringStats.total === 1,
+    `total=${substringStats.total}`,
+  );
+
   const bogus = await store.queryRecords({ exploit: 'nonsense', limit: 50 });
   check('an unknown signal matches nothing, not everything', bogus.total === 0, `total=${bogus.total}`);
 

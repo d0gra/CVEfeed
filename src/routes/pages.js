@@ -16,7 +16,7 @@ import { approvedPocsForCve } from '../store/pocStore.js';
 import { issueChallenge, turnstileSiteKey, usingTurnstile } from '../lib/captcha.js';
 import { originFor } from '../pages/layout.js';
 import { cvePage, notFoundPage } from '../pages/cve.js';
-import { agentsPage, earnPage, exploitedPage, moderatePage, stackCategoryPage, stackIndexPage, termsPage } from '../pages/index.js';
+import { agentsPage, depsPage, earnPage, exploitedPage, moderatePage, stackCategoryPage, stackIndexPage, termsPage } from '../pages/index.js';
 
 const router = Router();
 
@@ -31,6 +31,18 @@ const html = (res, markup, status = 200) =>
   res.status(status).type('html').set('Cache-Control', 'public, max-age=300, s-maxage=900').send(markup);
 
 const byNewest = (a, b) => Date.parse(b.published ?? 0) - Date.parse(a.published ?? 0);
+
+/**
+ * The dependency check. Static markup plus a client-side post, so the page is
+ * indexable and readable with JavaScript off even though the answer is not.
+ */
+router.get('/dependencies', (req, res) => {
+  const origin = originFor(req);
+  html(res, depsPage({ origin, canonical: `${origin}/dependencies`, assetVersion }));
+});
+
+// The name people reach for; one canonical URL for the page itself.
+router.get(['/deps', '/dependency-check'], (_req, res) => res.redirect(301, '/dependencies'));
 
 router.get('/cve/:id', async (req, res, next) => {
   const raw = String(req.params.id ?? '').trim();
@@ -217,6 +229,7 @@ router.get('/sitemap.xml', async (req, res, next) => {
       { loc: `${origin}/`, priority: '1.0', changefreq: 'hourly' },
       { loc: `${origin}/ai-stack`, priority: '0.9', changefreq: 'daily' },
       { loc: `${origin}/exploited`, priority: '0.9', changefreq: 'daily' },
+      { loc: `${origin}/dependencies`, priority: '0.9', changefreq: 'weekly' },
       { loc: `${origin}/mcp`, priority: '0.8', changefreq: 'weekly' },
       { loc: `${origin}/earn`, priority: '0.7', changefreq: 'monthly' },
       { loc: `${origin}/terms`, priority: '0.3', changefreq: 'yearly' },

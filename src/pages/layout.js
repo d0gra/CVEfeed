@@ -39,6 +39,7 @@ const nav = (current) =>
     ['/', 'Feed'],
     ['/ai-stack', 'AI stack'],
     ['/exploited', 'Exploited'],
+    ['/dependencies', 'Dependency check'],
     ['/earn', 'Earn'],
     ['/mcp', 'For agents'],
   ]
