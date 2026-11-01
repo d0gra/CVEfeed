@@ -8,7 +8,7 @@ import api from './routes/api.js';
 import { mountMcp } from './mcp.js';
 import { createLimiter } from './lib/ratelimit.js';
 import pages, { agentsPageHandler, assetVersionValue, setAssetVersion } from './routes/pages.js';
-import { mongoStatus } from './lib/mongo.js';
+import { closeMongo, mongoStatus } from './lib/mongo.js';
 import { missingPage, originFor } from './pages/index.js';
 import { llmsTxt } from './llms.js';
 import { getFeed, feedCacheStatus } from './aggregate.js';
@@ -226,10 +226,42 @@ export function start() {
     timer.unref();
   }
 
-  const shutdown = (signal) => () => {
+  /**
+   * Shut down without leaving anything behind.
+   *
+   * The previous version closed the HTTP server and left the MongoClient
+   * open, which matters more than it sounds: the driver keeps a monitoring
+   * connection per replica-set member plus its pool, and those handles kept
+   * the loop alive until the force-exit timer fired. On a redeploy that meant
+   * the outgoing process sat holding its threads while the incoming one
+   * started, and on a host that counts threads against a process cap, two
+   * overlapping copies is the difference between fitting and not.
+   *
+   * The force-exit timer is deliberately NOT unref'd. Unref'd, it only fires
+   * if something else is already keeping the loop alive - which is precisely
+   * the case it is meant to rescue us from, so it has to hold the loop itself.
+   */
+  let closing = false;
+  const shutdown = (signal) => async () => {
+    // A second signal during a slow drain should kill, not queue another drain.
+    if (closing) process.exit(0);
+    closing = true;
     console.log(`[cvefeed] ${signal} received, closing`);
-    server.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 8000).unref();
+
+    const forced = setTimeout(() => {
+      console.error('[cvefeed] shutdown timed out, exiting anyway');
+      process.exit(0);
+    }, 8000);
+
+    try {
+      await new Promise((resolve) => server.close(resolve));
+      await closeMongo();
+    } catch (error) {
+      console.error('[cvefeed] error while closing:', error.message);
+    } finally {
+      clearTimeout(forced);
+      process.exit(0);
+    }
   };
   process.on('SIGTERM', shutdown('SIGTERM'));
   process.on('SIGINT', shutdown('SIGINT'));
