@@ -13,10 +13,70 @@
 import { getDb } from '../lib/mongo.js';
 import { SEVERITY_ORDER } from '../lib/severity.js';
 import { STACK_CATEGORY_IDS } from '../stack.js';
+import { normalizeTerm } from '../lib/terms.js';
 
 const COLLECTION = 'cves';
 
 let indexesReady = null;
+
+/**
+ * Index problems, kept rather than swallowed.
+ *
+ * Every createIndex used to sit inside one `Promise.all([...]).catch(() => null)`,
+ * which meant a single failure aborted the rest and reported nothing at all -
+ * the app booted green on whatever indexes happened to already exist. Each one
+ * now fails on its own and says so, and /healthz surfaces the list.
+ */
+const indexWarnings = [];
+export const storeIndexWarnings = () => [...indexWarnings];
+
+const ensureIndex = (col, keys, options = {}) =>
+  col.createIndex(keys, options).catch((error) => {
+    const name = options.name ?? Object.keys(keys).join('_');
+    indexWarnings.push({ index: name, error: error.message });
+    console.warn(`[cvefeed] index ${name} was not created: ${error.message}`);
+    return null;
+  });
+
+/**
+ * The text index, checked but never rewritten.
+ *
+ * MongoDB allows one text index per collection, so changing this one's keys or
+ * weights means dropping it first - and between the drop and the create every
+ * $text query errors, which is the dashboard's main search path. Worse, the
+ * conflict error is exactly the kind that used to be swallowed, so a changed
+ * spec would silently keep the old behaviour.
+ *
+ * So this only looks, and says what it sees. To actually change the spec, do
+ * it deliberately against the cluster during a quiet moment:
+ *
+ *   db.cves.dropIndex('search')
+ *   db.cves.createIndex({ ... }, { name: 'search', weights: { ... } })
+ */
+async function verifyTextIndex(col) {
+  try {
+    const live = (await col.indexes()).find((i) => i.name === TEXT_INDEX.name);
+    if (!live) return;
+    const liveWeights = live.weights ?? {};
+    const same =
+      Object.keys(TEXT_INDEX.weights).length === Object.keys(liveWeights).length &&
+      Object.entries(TEXT_INDEX.weights).every(([field, weight]) => liveWeights[field] === weight);
+    if (same) return;
+    const message =
+      `the "${TEXT_INDEX.name}" index on the cluster does not match the spec in cveStore.js ` +
+      `(live: ${Object.keys(liveWeights).join(', ')}); it was NOT changed - recreate it by hand`;
+    indexWarnings.push({ index: TEXT_INDEX.name, error: message });
+    console.warn(`[cvefeed] ${message}`);
+  } catch {
+    /* a cluster that cannot list indexes has bigger problems than this check */
+  }
+}
+
+const TEXT_INDEX = {
+  name: 'search',
+  keys: { title: 'text', description: 'text', vendor: 'text', product: 'text' },
+  weights: { title: 10, vendor: 4, product: 4, description: 1 },
+};
 
 async function collection() {
   const db = await getDb();
@@ -25,31 +85,34 @@ async function collection() {
 
   indexesReady ??= Promise.all([
     // Sorts and the recency filter.
-    col.createIndex({ published: -1 }),
-    col.createIndex({ modified: -1 }),
+    ensureIndex(col, { published: -1 }),
+    ensureIndex(col, { modified: -1 }),
     // The default view: exploited first, then score, then recency.
-    col.createIndex({ exploited: -1, score: -1, published: -1 }),
-    col.createIndex({ score: -1 }),
-    col.createIndex({ epss: -1 }),
+    ensureIndex(col, { exploited: -1, score: -1, published: -1 }),
+    ensureIndex(col, { score: -1 }),
+    ensureIndex(col, { epss: -1 }),
     // Facets.
-    col.createIndex({ severity: 1 }),
-    col.createIndex({ sourceIds: 1 }),
-    col.createIndex({ kind: 1 }),
-    col.createIndex({ 'stack.categories': 1 }),
-    col.createIndex({ 'exploitation.maturityRank': 1 }),
+    ensureIndex(col, { severity: 1 }),
+    ensureIndex(col, { sourceIds: 1 }),
+    ensureIndex(col, { kind: 1 }),
+    ensureIndex(col, { 'stack.categories': 1 }),
+    ensureIndex(col, { 'exploitation.maturityRank': 1 }),
     // Lookups by any identifier a visitor might paste.
-    col.createIndex({ cveId: 1 }),
-    col.createIndex({ ghsaId: 1 }, { sparse: true }),
-    col.createIndex({ euvdId: 1 }, { sparse: true }),
-    col.createIndex({ advisoryId: 1 }, { sparse: true }),
+    ensureIndex(col, { cveId: 1 }),
+    ensureIndex(col, { ghsaId: 1 }, { sparse: true }),
+    ensureIndex(col, { euvdId: 1 }, { sparse: true }),
+    ensureIndex(col, { advisoryId: 1 }, { sparse: true }),
     // Free-text search. A text index matches words rather than substrings,
     // which is a real behaviour change from the old scan - but a substring
     // scan over a growing collection is not something to carry forward.
-    col.createIndex(
-      { title: 'text', description: 'text', vendor: 'text', product: 'text' },
-      { name: 'search', weights: { title: 10, vendor: 4, product: 4, description: 1 } },
-    ),
-  ]).catch(() => null);
+    // The names a record can be found by. Sparse because the field only
+    // appears as records are re-ingested, so the index stays proportional to
+    // how much of the corpus has actually been enriched.
+    ensureIndex(col, { searchTerms: 1 }, { name: 'terms', sparse: true }),
+    ensureIndex(col, { vendors: 1 }, { sparse: true }),
+    ensureIndex(col, { 'packages.ecosystem': 1 }, { sparse: true }),
+    ensureIndex(col, TEXT_INDEX.keys, { name: TEXT_INDEX.name, weights: TEXT_INDEX.weights }),
+  ]).then(() => verifyTextIndex(col));
 
   await indexesReady;
   return col;
@@ -114,6 +177,9 @@ const asList = (value) =>
  * Without this, a search for "c++" or "a|b" is a malformed pattern at best and
  * a pathological one at worst - the input comes straight off a query string.
  */
+/** Anything that is already an exact identifier skips the matching stages. */
+const IDENTIFIER = /^(CVE|GHSA|EUVD)-/i;
+
 const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
@@ -131,6 +197,7 @@ function substringClauses(term) {
     { title: pattern },
     { vendor: pattern },
     { product: pattern },
+    { searchTerms: pattern },
     { 'stack.subjects': pattern },
     { 'stack.categoryNames': pattern },
     { tags: pattern },
@@ -147,10 +214,38 @@ function substringClauses(term) {
  */
 export const canRetryAsSubstring = (query = {}) => {
   const term = String(query.q ?? '').trim();
-  return term.length >= 3 && !/^(CVE|GHSA|EUVD)-/i.test(term);
+  return term.length >= 3 && !IDENTIFIER.test(term);
 };
 
-export function buildFilter(query = {}, { substring = false } = {}) {
+/**
+ * Which matching stage to try first.
+ *
+ * Shared, and exported, because two callers have to agree on it: queryRecords
+ * runs the stages, and queryFromStore decides whether its optimistic facet
+ * counts need recomputing. If they disagreed, the visitor would get counts
+ * describing a different result set than the rows on screen.
+ */
+export function firstMode(query = {}) {
+  const term = String(query.q ?? '').trim();
+  if (!term || IDENTIFIER.test(term)) return 'words';
+  // An explicit match=words is the escape hatch from exact-wins; see the note
+  // in queryRecords.
+  if (String(query.match ?? '') === 'words') return 'words';
+  return normalizeTerm(term) ? 'exact' : 'words';
+}
+
+/** The stages to try, in order, stopping at the first that matches anything. */
+export function stagesFor(query = {}) {
+  const first = firstMode(query);
+  const stages = first === 'exact' ? ['exact', 'words'] : ['words'];
+  if (canRetryAsSubstring(query)) stages.push('substring');
+  return stages;
+}
+
+export function buildFilter(query = {}, { substring = false, mode } = {}) {
+  // `substring: true` predates `mode` and is still passed by callers and
+  // tests; it means the same thing.
+  const stage = mode ?? (substring ? 'substring' : 'words');
   const and = [];
 
   const severities = asList(query.severity).filter((s) => SEVERITY_ORDER.includes(s));
@@ -212,12 +307,17 @@ export function buildFilter(query = {}, { substring = false } = {}) {
   const term = String(query.q ?? '').trim();
   if (term) {
     // An identifier is matched exactly; anything else goes to the text index.
-    if (/^(CVE|GHSA|EUVD)-/i.test(term)) {
+    if (IDENTIFIER.test(term)) {
       const upper = term.toUpperCase();
       and.push({
         $or: [{ cveId: upper }, { ghsaId: upper }, { euvdId: upper }, { advisoryId: upper }, { _id: upper }],
       });
-    } else if (substring) {
+    } else if (stage === 'exact') {
+      // One indexed equality against the names the record is known by. This
+      // is the only stage that can answer "is there anything against THIS
+      // software" without scanning.
+      and.push({ searchTerms: normalizeTerm(term) });
+    } else if (stage === 'substring') {
       // The fallback for what a text index cannot do: match inside words.
       // A package name is the case that matters - "lodash" is a whole word in
       // "Prototype Pollution in lodash" but not in "node-lodash", and "log4j"
@@ -235,7 +335,7 @@ export function buildFilter(query = {}, { substring = false } = {}) {
   // Records resolved by a direct lookup are kept so they are never searched
   // upstream twice, but they are not part of the current window: they surface
   // only when asked for by id, never in the browsable listing or its counts.
-  if (!/^(CVE|GHSA|EUVD)-/i.test(term)) and.push({ outsideWindow: { $ne: true } });
+  if (!IDENTIFIER.test(term)) and.push({ outsideWindow: { $ne: true } });
 
   return and.length ? { $and: and } : {};
 }
@@ -272,20 +372,34 @@ export async function queryRecords(query = {}) {
     return { rows, total };
   };
 
-  let matchedBy = 'words';
-  let { rows, total } = await run(buildFilter(query));
+  /**
+   * Three stages, cheapest and most precise first, stopping at the first that
+   * matches anything.
+   *
+   *   exact     - the term IS a package, vendor or product name. One indexed
+   *               equality. This is the stage that makes "litellm" work.
+   *   words     - the $text index, over advisory prose.
+   *   substring - a scan, for a term inside a word ("log4j" in "Log4Shell").
+   *
+   * Exact-wins is the point, but it has a cost worth being explicit about: a
+   * term with any exact match hides the text matches, so "chrome" stops
+   * returning "Chromium sandbox escape". And because records only gain
+   * searchTerms as they are re-ingested, a newly enriched record can hide
+   * older ones that simply have not been touched yet. That is why `match`
+   * exists as an escape hatch and why the dashboard surfaces it whenever this
+   * returns 'exact' - without it the hiding would be invisible.
+   */
+  const stages = stagesFor(query);
+  let matchedBy = stages[0];
+  let rows = [];
+  let total = 0;
 
-  // A word search that found nothing is retried as a substring search. This is
-  // the difference between a search box that works the way people expect and
-  // one that answers "nothing matches" for "lodash" because the advisory says
-  // "lodash" inside a longer token, or for "log4j" because the title says
-  // "Log4Shell". The indexed search runs first precisely so the scan is the
-  // exception rather than the rule.
-  if (total === 0 && canRetryAsSubstring(query)) {
-    const retry = await run(buildFilter(query, { substring: true }));
-    if (retry.total > 0) {
-      ({ rows, total } = retry);
-      matchedBy = 'substring';
+  for (const stage of stages) {
+    const result = await run(buildFilter(query, { mode: stage }));
+    if (result.total > 0 || stage === stages[stages.length - 1]) {
+      ({ rows, total } = result);
+      matchedBy = stage;
+      if (result.total > 0) break;
     }
   }
 
@@ -304,13 +418,13 @@ export async function queryRecords(query = {}) {
  * by scanning the collection into the host would put back exactly what moving
  * it was meant to remove.
  */
-export async function aggregateStats(query = {}, { substring = false } = {}) {
+export async function aggregateStats(query = {}, { substring = false, mode } = {}) {
   const col = await collection();
   if (!col) return null;
 
   // The counts have to be computed over whichever filter actually produced the
   // list, or the facets would describe a different result set than the rows.
-  const filter = buildFilter(query, { substring });
+  const filter = buildFilter(query, { substring, mode });
   const [result] = await col
     .aggregate([
       { $match: filter },
@@ -428,6 +542,55 @@ export async function findRecordsByIds(cveIds) {
   return out;
 }
 
+/**
+ * Every name in the corpus, with how often it appears.
+ *
+ * One aggregation for the whole vocabulary, run rarely and cached, rather
+ * than a `^prefix` query per keystroke. The difference matters on a shared
+ * free cluster: a handful of visitors typing would otherwise be hundreds of
+ * index scans a minute, where this is a few scans a day and a prefix filter
+ * in the host's memory. The vocabulary is small enough for that to be the
+ * obviously right trade - a few hundred names for a corpus of thousands.
+ */
+export async function aggregateSuggestionVocabulary({ limit = 2000 } = {}) {
+  const col = await collection();
+  if (!col) return null;
+
+  const [result] = await col
+    .aggregate([
+      { $match: { outsideWindow: { $ne: true } } },
+      {
+        $facet: {
+          packages: [
+            { $unwind: '$packages' },
+            { $group: { _id: { name: '$packages.name', ecosystem: '$packages.ecosystem' }, n: { $sum: 1 } } },
+            { $sort: { n: -1 } },
+            { $limit: limit },
+          ],
+          vendors: [
+            { $unwind: '$vendors' },
+            { $group: { _id: '$vendors', n: { $sum: 1 } } },
+            { $sort: { n: -1 } },
+            { $limit: limit },
+          ],
+          products: [
+            { $unwind: '$products' },
+            { $group: { _id: '$products', n: { $sum: 1 } } },
+            { $sort: { n: -1 } },
+            { $limit: limit },
+          ],
+        },
+      },
+    ])
+    .toArray();
+
+  return {
+    packages: (result?.packages ?? []).map((r) => ({ value: r._id.name, ecosystem: r._id.ecosystem, count: r.n })),
+    vendors: (result?.vendors ?? []).map((r) => ({ value: r._id, count: r.n })),
+    products: (result?.products ?? []).map((r) => ({ value: r._id, count: r.n })),
+  };
+}
+
 /** Identifiers only, for the sitemap: the documents themselves are not needed. */
 export async function listIdsForSitemap(limit = 5000) {
   const col = await collection();
@@ -445,7 +608,14 @@ export async function listIdsForSitemap(limit = 5000) {
 export const storeCounts = async () => {
   const col = await collection();
   if (!col) return null;
-  return { records: await col.estimatedDocumentCount() };
+  // How much of the corpus has been enriched with names. Coverage grows as
+  // records are re-ingested, so this is the number to watch rather than
+  // assume - see the backfill note in the README.
+  const [records, withSearchTerms] = await Promise.all([
+    col.estimatedDocumentCount(),
+    col.countDocuments({ searchTerms: { $exists: true, $ne: [] } }),
+  ]);
+  return { records, withSearchTerms };
 };
 
 export default {
@@ -455,6 +625,7 @@ export default {
   findRecordById,
   findRecordsByIds,
   canRetryAsSubstring,
+  aggregateSuggestionVocabulary,
   listIdsForSitemap,
   storeReady,
   storeCounts,

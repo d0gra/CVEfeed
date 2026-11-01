@@ -36,11 +36,17 @@ function normalize(entry, { exploited = false } = {}) {
   const score = Number(entry.baseScore);
   const epss = Number(entry.epss);
 
-  const vendor =
-    (entry.enisaIdVendor ?? [])
-      .map((v) => v?.vendor?.name)
-      .filter(Boolean)
-      .join(', ') || null;
+  const vendors = [
+    ...new Set((entry.enisaIdVendor ?? []).map((v) => v?.vendor?.name).filter(Boolean)),
+  ];
+  // enisaIdProduct was being ignored entirely, though the /search endpoint we
+  // already call returns it in full - product name and version both. It is
+  // the only structured product data any source gives us for software that
+  // is not in a package registry.
+  const products = [
+    ...new Set((entry.enisaIdProduct ?? []).map((p) => p?.product?.name).filter(Boolean)),
+  ];
+  const vendor = vendors.join(', ') || null;
 
   const plain = toPlainText(entry.description);
 
@@ -58,6 +64,9 @@ function normalize(entry, { exploited = false } = {}) {
     modified: parseEuvdDate(entry.dateUpdated ?? entry.datePublished),
     url: `https://euvd.enisa.europa.eu/vulnerability/${entry.id}`,
     vendor,
+    product: products.slice(0, 6).join(', ') || null,
+    vendors,
+    products,
     assigner: entry.assigner ?? null,
     references: splitLines(entry.references)
       .slice(0, 12)

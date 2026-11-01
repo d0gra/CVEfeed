@@ -1,5 +1,6 @@
 import { severityFromScore, severityRank } from './lib/severity.js';
 import { classifyStack } from './stack.js';
+import { buildSearchTerms, normalizePackage, packageKey } from './lib/terms.js';
 
 /**
  * Shared record-merging rules.
@@ -69,6 +70,17 @@ export function seed(item, sourceMeta) {
     links: { [item.source]: item.url ?? null },
     cweSet: new Set(item.cwes ?? []),
     tagSet: new Set(item.tags ?? []),
+    // Names union across sources rather than first-source-wins, which is what
+    // `vendor`/`product` below do with ??=. Two registers describing the same
+    // CVE routinely name different affected software, and keeping only the
+    // first one read would discard half of it.
+    vendorSet: new Set(item.vendors ?? []),
+    productSet: new Set(item.products ?? []),
+    // Keyed on the coordinate, not the name: npm `zip` and crates.io `zip`
+    // are unrelated software and must stay two entries.
+    packageMap: new Map(
+      (item.packages ?? []).map(normalizePackage).filter(Boolean).map((p) => [packageKey(p), p]),
+    ),
     refMap: new Map((item.references ?? []).filter((r) => r?.url).map((r) => [r.url, r])),
     relatedSet: new Set(item.relatedCves ?? []),
   };
@@ -105,6 +117,13 @@ export function mergeInto(target, item, sourceMeta) {
   if (item.exploited) target.exploited = true;
   if (item.kev) target.kev = { ...item.kev, ...(target.kev ?? {}) };
 
+  for (const vendor of item.vendors ?? []) target.vendorSet.add(vendor);
+  for (const product of item.products ?? []) target.productSet.add(product);
+  for (const entry of item.packages ?? []) {
+    const pkg = normalizePackage(entry);
+    if (pkg) target.packageMap.set(packageKey(pkg), pkg);
+  }
+
   for (const cwe of item.cwes ?? []) target.cweSet.add(cwe);
   for (const tag of item.tags ?? []) target.tagSet.add(tag);
   for (const cve of item.relatedCves ?? []) target.relatedSet.add(cve);
@@ -115,18 +134,29 @@ export function mergeInto(target, item, sourceMeta) {
 }
 
 export function finalize(record) {
-  const { cweSet, tagSet, refMap, relatedSet, ...rest } = record;
+  const { cweSet, tagSet, refMap, relatedSet, vendorSet, productSet, packageMap, ...rest } = record;
 
   // Severity always follows the merged CVSS score; exploitation is separate.
   const severity = severityFromScore(rest.score);
 
   const stack = classifyStack(rest);
 
+  const vendors = [...vendorSet].filter(Boolean).sort();
+  const products = [...productSet].filter(Boolean).sort();
+  const packages = [...packageMap.values()];
+
   return {
     ...rest,
     severity,
     severityRank: severityRank(severity),
     stack,
+    vendors,
+    products,
+    packages,
+    ecosystems: [...new Set(packages.map((p) => p.ecosystem).filter(Boolean))].sort(),
+    // Built last, because it folds in the stack subjects classifyStack has
+    // just derived above.
+    searchTerms: buildSearchTerms({ vendors, products, packages, product: rest.product, stack }),
     cwes: [...cweSet].sort(),
     tags: [...tagSet].sort(),
     references: [...refMap.values()].slice(0, 15),

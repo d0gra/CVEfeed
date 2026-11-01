@@ -31,6 +31,14 @@ const dom = {
   empty: el('empty'),
   emptyDeps: el('empty-deps'),
   emptyTerm: el('empty-term'),
+  listbox: el('q-listbox'),
+  comboStatus: el('q-status'),
+  depOffer: el('dep-offer'),
+  depOfferTerm: el('dep-offer-term'),
+  depOfferEco: el('dep-offer-eco'),
+  depOfferLink: el('dep-offer-link'),
+  matchNote: el('match-note'),
+  matchAll: el('match-all'),
   skeletons: el('skeletons'),
   pager: el('pager'),
   results: el('results'),
@@ -59,6 +67,11 @@ const dom = {
 
 const state = {
   q: '',
+  // Which matching stage to force. Empty means the server cascades from an
+  // exact name match down to prose; 'words' is the escape hatch that skips
+  // straight to the text search, for when an exact match has hidden what you
+  // were actually looking for.
+  match: '',
   // Newest first: a feed is read for what is new. Priority ordering is a
   // click away in the sort control.
   sort: 'newest',
@@ -118,6 +131,7 @@ const fullDate = (iso) => {
 function readUrl() {
   const p = new URLSearchParams(location.search);
   state.q = p.get('q') ?? '';
+  state.match = p.get('match') === 'words' ? 'words' : '';
   state.sort = p.get('sort') ?? 'newest';
   state.days = Number.parseInt(p.get('days') ?? '0', 10) || 0;
   state.exploited = p.get('exploited') === '1';
@@ -140,6 +154,7 @@ function stackParam() {
 function writeUrl() {
   const p = new URLSearchParams();
   if (state.q) p.set('q', state.q);
+  if (state.match) p.set('match', state.match);
   if (state.sort !== 'newest') p.set('sort', state.sort);
   if (state.days) p.set('days', String(state.days));
   if (state.exploited) p.set('exploited', '1');
@@ -569,14 +584,38 @@ function renderFeed(payload) {
   dom.feed.innerHTML = items.map(cardHtml).join('');
   dom.empty.hidden = items.length > 0;
 
+  const term = (meta.q ?? dom.q.value ?? '').trim();
+
+  // The server decided whether this term actually names a package, because
+  // that is where the vocabulary lives. Shown whether or not there were
+  // results: "three advisories mention lodash" and "which version am I on"
+  // are different questions, and only one of them this page can answer.
+  const hint = meta.packageHint;
+  if (dom.depOffer) {
+    dom.depOffer.hidden = !hint;
+    if (hint) {
+      dom.depOfferTerm.textContent = hint.term;
+      dom.depOfferEco.textContent = hint.ecosystems?.length ? ` on ${hint.ecosystems.join(' and ')}` : '';
+      const params = new URLSearchParams({ pkg: hint.term });
+      if (hint.ecosystems?.length === 1) params.set('eco', hint.ecosystems[0]);
+      dom.depOfferLink.href = `/dependencies?${params}`;
+    }
+  }
+
+  // An exact name match hides the wider text results, which is the point but
+  // is also invisible unless we say so - and with names only appearing on
+  // records as they are re-ingested, it can hide older ones for no reason the
+  // visitor could guess at.
+  if (dom.matchNote) dom.matchNote.hidden = meta.matchedBy !== 'exact';
+
   // A term that found nothing and looks like a package name is almost always
   // someone asking "is this dependency vulnerable", which this feed's window
   // cannot answer and a search cannot answer at all - it has no versions. So
   // point at the check that can rather than leaving them at "nothing matches".
+  // Suppressed when the offer above is already saying it.
   if (dom.emptyDeps) {
-    const term = (meta.q ?? dom.q.value ?? '').trim();
     const looksLikePackage = term.length > 1 && /^[@a-z0-9][a-z0-9._/@-]*$/i.test(term) && !/^(CVE|GHSA|EUVD)-/i.test(term);
-    const show = items.length === 0 && looksLikePackage;
+    const show = items.length === 0 && looksLikePackage && !hint;
     dom.emptyDeps.hidden = !show;
     if (show && dom.emptyTerm) dom.emptyTerm.textContent = term;
   }
@@ -589,7 +628,7 @@ function renderFeed(payload) {
     ? `${meta.total.toLocaleString()} ${noun}`
     : 'Nothing matching';
   dom.resultsNote.textContent = meta.total
-    ? `Showing ${from}–${to} · ${meta.sort}${meta.matchedBy === 'substring' ? ' · partial-word match' : ''}`
+    ? `Showing ${from}–${to} · ${meta.sort}${meta.matchedBy === 'exact' ? ' · exact name match' : meta.matchedBy === 'substring' ? ' · partial-word match' : ''}`
     : `${meta.totalUnfiltered.toLocaleString()} in the window`;
 
   renderPager(meta);
@@ -613,6 +652,7 @@ function renderFeed(payload) {
 function buildQuery() {
   const p = new URLSearchParams();
   if (state.q) p.set('q', state.q);
+  if (state.match) p.set('match', state.match);
   p.set('sort', state.sort);
   if (state.days) p.set('days', String(state.days));
   if (state.exploited) p.set('exploited', '1');
@@ -691,9 +731,182 @@ function toggleSet(set, value) {
 
 dom.q.addEventListener('input', debounce(() => {
   state.q = dom.q.value.trim();
+  // A new term starts fresh: the escape hatch applied to the previous one.
+  state.match = '';
   dom.clearQ.hidden = !dom.q.value;
   apply();
 }, 280));
+
+/* ---------- the search suggestions ----------
+ *
+ * An ARIA 1.2 combobox, which has one rule that is easy to get wrong and
+ * invisible when you do: DOM focus never leaves the input. The active option
+ * is conveyed only by aria-activedescendant, so typing keeps working and
+ * screen readers announce the option without the caret moving. Calling
+ * .focus() on an option would break both.
+ *
+ * Kept in this file rather than its own module on purpose. index.html loads
+ * app.js with a ?v= cache-busting stamp, and a bare `import './suggest.js'`
+ * would be fetched without it - so a deploy could serve a stale suggestions
+ * module against a fresh app.
+ */
+let comboItems = [];
+let comboActive = -1;
+let comboInFlight = null;
+
+function closeCombo() {
+  comboItems = [];
+  comboActive = -1;
+  if (!dom.listbox) return;
+  dom.listbox.hidden = true;
+  dom.listbox.replaceChildren();
+  dom.q.setAttribute('aria-expanded', 'false');
+  dom.q.removeAttribute('aria-activedescendant');
+}
+
+const KIND_LABEL = { package: 'package', vendor: 'vendor', product: 'product', subject: 'project' };
+
+function paintCombo() {
+  dom.listbox.replaceChildren();
+
+  comboItems.forEach((item, index) => {
+    const li = document.createElement('li');
+    li.id = `q-opt-${index}`;
+    li.className = 'combo-option';
+    li.setAttribute('role', 'option');
+    li.setAttribute('aria-selected', String(index === comboActive));
+    li.dataset.value = item.value;
+
+    const name = document.createElement('span');
+    name.className = 'combo-name';
+    name.textContent = item.label ?? item.value;
+    li.append(name);
+
+    const meta = document.createElement('span');
+    meta.className = 'combo-meta';
+    meta.textContent = [KIND_LABEL[item.kind] ?? item.kind, item.ecosystem, item.count ? `${item.count}` : null]
+      .filter(Boolean)
+      .join(' \u00b7 ');
+    li.append(meta);
+
+    if (index === comboActive) li.classList.add('is-active');
+    dom.listbox.append(li);
+  });
+
+  const open = comboItems.length > 0;
+  dom.listbox.hidden = !open;
+  dom.q.setAttribute('aria-expanded', String(open));
+  if (comboActive >= 0) dom.q.setAttribute('aria-activedescendant', `q-opt-${comboActive}`);
+  else dom.q.removeAttribute('aria-activedescendant');
+
+  // Listbox contents changing is not announced on its own.
+  if (dom.comboStatus) {
+    dom.comboStatus.textContent = open
+      ? `${comboItems.length} suggestion${comboItems.length === 1 ? '' : 's'}`
+      : '';
+  }
+}
+
+function moveCombo(delta) {
+  if (!comboItems.length) return;
+  comboActive = (comboActive + delta + comboItems.length) % comboItems.length;
+  paintCombo();
+}
+
+function commitCombo(value) {
+  dom.q.value = value;
+  state.q = value;
+  state.match = '';
+  dom.clearQ.hidden = false;
+  closeCombo();
+  apply();
+}
+
+// Faster than the 280ms feed debounce: a typeahead has to feel immediate, and
+// the request behind it is a prefix filter over a cached array.
+const fetchSuggestions = debounce(async () => {
+  const term = dom.q.value.trim();
+  if (term.length < 2) {
+    closeCombo();
+    return;
+  }
+
+  if (comboInFlight) comboInFlight.abort();
+  const controller = new AbortController();
+  comboInFlight = controller;
+
+  try {
+    const response = await fetch(`/api/suggest?q=${encodeURIComponent(term)}`, { signal: controller.signal });
+    if (!response.ok) return;
+    const data = await response.json();
+    // The box may have moved on while this was in flight.
+    if (dom.q.value.trim() !== term) return;
+    comboItems = data.suggestions ?? [];
+    comboActive = -1;
+    paintCombo();
+  } catch {
+    // A failed suggestion is a non-event; the search box still works.
+  } finally {
+    if (comboInFlight === controller) comboInFlight = null;
+  }
+}, 120);
+
+if (dom.listbox) {
+  dom.q.addEventListener('input', fetchSuggestions);
+
+  dom.q.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      if (!comboItems.length) fetchSuggestions();
+      else moveCombo(1);
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      moveCombo(-1);
+      return;
+    }
+    if (event.key === 'Enter' && comboActive >= 0) {
+      event.preventDefault();
+      commitCombo(comboItems[comboActive].value);
+      return;
+    }
+    if (event.key === 'Escape' && !dom.listbox.hidden) {
+      // Close the list but keep focus and the text. The global Escape handler
+      // blurs the box, so this must stop it reaching that one - otherwise a
+      // single press both closes the list and drops you out of the field.
+      event.preventDefault();
+      event.stopPropagation();
+      closeCombo();
+      return;
+    }
+    // Tab commits nothing and leaves: never trap the keyboard.
+    if (event.key === 'Tab') closeCombo();
+  });
+
+  // pointerdown + preventDefault so the input does not blur out from under
+  // the click before it registers.
+  dom.listbox.addEventListener('pointerdown', (event) => {
+    if (event.target.closest('[data-value]')) event.preventDefault();
+  });
+  dom.listbox.addEventListener('click', (event) => {
+    const option = event.target.closest('[data-value]');
+    if (option) commitCombo(option.dataset.value);
+  });
+
+  dom.q.addEventListener('blur', () => {
+    // Let a click on an option land first.
+    setTimeout(closeCombo, 120);
+  });
+}
+
+if (dom.matchAll) {
+  dom.matchAll.addEventListener('click', (event) => {
+    event.preventDefault();
+    state.match = 'words';
+    apply();
+  });
+}
 
 dom.clearQ.addEventListener('click', () => {
   dom.q.value = '';
@@ -856,6 +1069,7 @@ dom.refresh.addEventListener('click', async () => {
 
 dom.reset.addEventListener('click', () => {
   state.q = '';
+  state.match = '';
   state.sort = 'priority';
   state.days = 0;
   state.exploited = false;
@@ -891,6 +1105,7 @@ document.addEventListener('keydown', (event) => {
 function syncControls() {
   dom.q.value = state.q;
   dom.clearQ.hidden = !state.q;
+  closeCombo();
   dom.sort.value = state.sort;
   dom.days.value = String(state.days);
   dom.exploited.checked = state.exploited;

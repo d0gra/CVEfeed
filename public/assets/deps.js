@@ -71,6 +71,28 @@ if (form && input && results) {
 
   input.addEventListener('input', showDetected);
 
+  /**
+   * Arriving from a search for a package name.
+   *
+   * Deliberately a hint rather than a prefilled manifest: a synthetic
+   * `{"lodash": ""}` has no concrete version, coerceVersion refuses it, and
+   * the visitor would land on "No usable package coordinates" - an error in
+   * place of help. The version is the one thing only they have.
+   */
+  const params = new URLSearchParams(location.search);
+  const wanted = params.get('pkg');
+  if (wanted) {
+    const eco = params.get('eco');
+    const hint = el('p', 'dep-prefill');
+    hint.append(
+      document.createTextNode('Looking for '),
+      el('strong', null, eco ? `${wanted} (${eco})` : wanted),
+      document.createTextNode('? Paste the lockfile that pins its version — that is the part a search cannot know.'),
+    );
+    form.insertBefore(hint, form.firstChild);
+    input.focus();
+  }
+
   if (exampleButton) {
     exampleButton.addEventListener('click', () => {
       const raw = document.getElementById('dep-example-data');

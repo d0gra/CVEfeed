@@ -126,9 +126,12 @@ const TOOLS = [
         q: {
           type: 'string',
           description:
-            'Free text over titles, descriptions, vendors and products, or an exact identifier. ' +
+            'A package, vendor or product name, free text, or an exact identifier. A term that ' +
+            'names known software is matched exactly and outranks text matches; otherwise this ' +
+            'searches advisory titles and descriptions, falling back to a partial-word match. ' +
             'An exact CVE ID that is not yet stored is fetched live from the registers and kept, ' +
-            'so any published CVE resolves - there is no cut-off date.',
+            'so any published CVE resolves - there is no cut-off date. For whether a specific ' +
+            'installed version is affected, use check_dependencies instead: this cannot match versions.',
         },
         severity: { type: 'array', items: { type: 'string', enum: SEVERITY_ORDER }, description: 'Restrict to these severities.' },
         stack: {
@@ -150,6 +153,14 @@ const TOOLS = [
           enum: ['observed', 'weaponized', 'public-exploit', 'proof-of-concept'],
           description:
             'Minimum rung of the exploit-maturity ladder, highest first: observed in the wild, weaponized (Metasploit), a public exploit, then a proof of concept. Asking for "public-exploit" also returns everything above it.',
+        },
+        match: {
+          type: 'string',
+          enum: ['words'],
+          description:
+            'Force a full-text search. By default a term that exactly names a package or vendor ' +
+            'matches only those records, which hides text matches - pass "words" to search all ' +
+            'advisory text instead.',
         },
         minCvss: { type: 'number', minimum: 0, maximum: 10 },
         days: { type: 'integer', minimum: 1, maximum: 120, description: 'Only records published within this many days.' },
@@ -272,6 +283,7 @@ const asArray = (value) => (Array.isArray(value) ? value : value == null ? [] : 
 function toQuery(args = {}, overrides = {}) {
   const query = {
     q: args.q,
+    match: args.match,
     severity: asArray(args.severity).join(','),
     stack: asArray(args.stack).join(','),
     minScore: args.minCvss,

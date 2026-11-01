@@ -478,3 +478,13 @@
   .dep-count { margin-left: 0; }
   .dep-patch { padding: 16px 16px 4px; }
 }
+
+.dep-prefill {
+  font-size: 13px;
+  color: var(--ink-soft);
+  border-left: 2px solid var(--stack);
+  padding: 9px 0 9px 13px;
+  margin: 0 0 18px;
+  line-height: 1.6;
+}
+.dep-prefill strong { font-family: var(--mono); color: var(--ink); font-weight: 500; }

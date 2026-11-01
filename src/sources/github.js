@@ -34,12 +34,23 @@ function normalize(advisory) {
   if (!advisory?.ghsa_id || advisory.withdrawn_at) return null;
 
   const { score, scoreVersion, vector } = pickScore(advisory);
-  const packages = [
-    ...new Set((advisory.vulnerabilities ?? []).map((v) => v.package?.name).filter(Boolean)),
-  ];
-  const ecosystems = [
-    ...new Set((advisory.vulnerabilities ?? []).map((v) => v.package?.ecosystem).filter(Boolean)),
-  ];
+  // GitHub is the one source that hands over real registry coordinates. They
+  // used to be flattened into comma-joined strings here, which threw away the
+  // ecosystem/name pairing - and npm `zip` and crates.io `zip` are unrelated
+  // software, so the pairing is the part that matters.
+  const coordinates = [];
+  const seen = new Set();
+  for (const vuln of advisory.vulnerabilities ?? []) {
+    const name = vuln?.package?.name;
+    if (!name) continue;
+    const key = `${vuln.package.ecosystem ?? ''}|${name.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    coordinates.push({ name, ecosystem: vuln.package.ecosystem ?? null });
+  }
+
+  const packages = [...new Set(coordinates.map((c) => c.name))];
+  const ecosystems = [...new Set(coordinates.map((c) => c.ecosystem).filter(Boolean))];
 
   const epss = Number(advisory.epss?.percentage);
 
@@ -56,8 +67,14 @@ function normalize(advisory) {
     published: toIso(advisory.published_at),
     modified: toIso(advisory.updated_at || advisory.published_at),
     url: advisory.html_url || `https://github.com/advisories/${advisory.ghsa_id}`,
-    vendor: ecosystems.join(', ') || null,
+    // Deliberately null. This used to hold the ecosystem list, which meant
+    // every GitHub advisory claimed a vendor of "npm" or "pip" - and `vendor`
+    // is in the text index at weight 4, so a search for "npm" matched every
+    // JavaScript advisory in the corpus. The ecosystem travels in `packages`
+    // and `tags`, where it belongs.
+    vendor: null,
     product: packages.slice(0, 6).join(', ') || null,
+    packages: coordinates,
     cwes: (advisory.cwes ?? []).map((c) => c.cwe_id).filter(Boolean),
     references: (advisory.references ?? []).slice(0, 12).map((url) => ({ url, tags: [] })),
     epss: Number.isFinite(epss) ? epss : null,

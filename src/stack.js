@@ -199,4 +199,21 @@ export function classifyStack(record) {
 }
 
 /** Everything the dashboard needs to render the facet. */
+/**
+ * The curated vocabulary, as suggestion candidates.
+ *
+ * A derived, plain-data view rather than SUBJECTS itself, which carries
+ * RegExps and is not safe to hand to JSON. This is the layer that makes the
+ * typeahead work with the database down: a few hundred strings already in the
+ * process, no query, no cache.
+ */
+export const subjectSuggestions = () =>
+  SUBJECTS.map(({ name, short, category, packages, vendors }) => ({
+    value: name,
+    short: short ?? null,
+    category,
+    packages: packages ?? [],
+    vendors: vendors ?? [],
+  }));
+
 export const stackFacets = () => STACK_CATEGORIES.map(({ id, name, blurb }) => ({ id, name, blurb }));

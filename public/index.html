@@ -65,9 +65,15 @@
 
   <section class="filters" aria-label="Filters">
     <div class="searchline">
-      <input type="search" id="q" placeholder="Search by CVE, vendor, product or keyword" autocomplete="off" aria-label="Search">
+      <div class="combo">
+        <input type="search" id="q" placeholder="Search by CVE, package, vendor or keyword" autocomplete="off"
+               aria-label="Search" role="combobox" aria-expanded="false" aria-controls="q-listbox"
+               aria-autocomplete="list" aria-haspopup="listbox">
+        <ul class="combo-list" id="q-listbox" role="listbox" aria-label="Search suggestions" hidden></ul>
+      </div>
       <button type="button" id="clear-q" class="quiet" hidden>Clear</button>
     </div>
+    <span id="q-status" class="sr-only" role="status" aria-live="polite"></span>
 
     <div class="stackline" id="stackline" hidden>
       <span class="stack-label">AI&nbsp;stack</span>
@@ -123,6 +129,20 @@
       <h2 id="results-count">Loading</h2>
       <p id="results-note"></p>
     </div>
+
+    <!-- Shown when the term names a package. Deliberately NOT class="notice":
+         renderBanner clears every .notice on each render. -->
+    <div class="offer" id="dep-offer" hidden>
+      <p><strong id="dep-offer-term"></strong> is a package name<span id="dep-offer-eco"></span>.
+      This search finds advisories that <em>mention</em> it &mdash; it cannot tell which version you run.
+      <a id="dep-offer-link" href="/dependencies">Check it by version instead &rarr;</a></p>
+    </div>
+
+    <!-- Shown when an exact name match has hidden the wider text results. -->
+    <p class="match-note" id="match-note" hidden>
+      Matched a package or vendor name exactly.
+      <a href="#" id="match-all">Search all advisory text instead</a>
+    </p>
 
     <ol class="feed" id="feed"></ol>
 

@@ -16,6 +16,7 @@ import {
 } from '../store/pocStore.js';
 import { isCveId } from '../lookup.js';
 import { sweepDependencies } from '../deps.js';
+import { suggestFor } from '../lib/suggest.js';
 import { MANIFEST_TYPE_IDS, describeManifest, parseManifest } from '../lib/manifests.js';
 import { createLimiter } from '../lib/ratelimit.js';
 
@@ -39,6 +40,24 @@ router.get('/feed', async (req, res, next) => {
     res.json(await queryFeed(req.query));
   } catch (error) {
     next(error);
+  }
+});
+
+/**
+ * Typeahead for the search box.
+ *
+ * Never errors: an empty list is a correct answer for "nothing matches", and
+ * a search box that shows an error while you type is worse than one that
+ * shows nothing. Cacheable for a minute - the vocabulary behind it only
+ * rebuilds every few hours anyway.
+ */
+router.get('/suggest', async (req, res) => {
+  const limit = Math.min(Math.max(Number.parseInt(req.query.limit ?? '', 10) || 8, 1), 20);
+  try {
+    const suggestions = await suggestFor(req.query.q, { limit });
+    res.set('Cache-Control', 'public, max-age=60').json({ q: String(req.query.q ?? ''), suggestions });
+  } catch {
+    res.json({ q: String(req.query.q ?? ''), suggestions: [] });
   }
 });
 

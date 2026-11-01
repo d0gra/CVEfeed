@@ -31,6 +31,12 @@ function normalize(entry) {
     url: `https://nvd.nist.gov/vuln/detail/${entry.cveID}`,
     vendor: entry.vendorProject ?? null,
     product: entry.product ?? null,
+    vendors: entry.vendorProject ? [entry.vendorProject] : [],
+    // KEV products are things like "Internet Explorer" - real names people
+    // search for, but not registry coordinates. They must never become
+    // `packages`, or the dependency cross-link would offer to version-check
+    // Windows.
+    products: entry.product ? [entry.product] : [],
     cwes: (entry.cwes ?? []).filter((c) => /^CWE-\d+$/.test(c ?? '')),
     references: [
       {

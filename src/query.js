@@ -11,7 +11,9 @@ import { SEVERITY_ORDER } from './lib/severity.js';
 import { isCveId, lookupCve } from './lookup.js';
 import { STACK_CATEGORY_IDS } from './stack.js';
 import { attachSignals, MATURITY, pocLinksFor } from './exploits.js';
-import { aggregateStats, findRecordById, queryRecords, upsertRecords } from './store/cveStore.js';
+import { aggregateStats, findRecordById, firstMode, queryRecords, upsertRecords } from './store/cveStore.js';
+import { normalizeTerm } from './lib/terms.js';
+import { packageHintFor } from './lib/suggest.js';
 import { mongoConfigured } from './lib/mongo.js';
 
 const asList = (value) =>
@@ -25,7 +27,7 @@ const int = (value, fallback) => {
   return Number.isFinite(n) ? n : fallback;
 };
 
-function applyFilters(items, query) {
+function applyFilters(items, query, { mode = 'words' } = {}) {
   const severities = asList(query.severity).filter((s) => SEVERITY_ORDER.includes(s));
   const sources = asList(query.source);
   const kinds = asList(query.kind);
@@ -38,6 +40,11 @@ function applyFilters(items, query) {
   const anyStack = stackRaw.includes('any') || stackRaw.includes('all');
   const stacks = stackRaw.filter((s) => STACK_CATEGORY_IDS.includes(s));
   const needle = String(query.q ?? '').trim().toLowerCase();
+  // Only when the caller has not explicitly asked for a full-text search.
+  const exactTerm = String(query.match ?? '') === 'words' ? null : normalizeTerm(needle);
+  // 'exact' narrows to records that carry the term as a name; 'words' is the
+  // wider prose match, which includes the exact hits as a subset.
+  const exactOnly = mode === 'exact';
   const minScore = Number.parseFloat(query.minScore);
   const days = int(query.days, 0);
   const exploitedOnly = ['1', 'true', 'yes'].includes(String(query.exploited ?? '').toLowerCase());
@@ -78,6 +85,12 @@ function applyFilters(items, query) {
     }
 
     if (needle) {
+      // The database path matches an exact name before it matches prose, and
+      // the memory fallback has to behave the same way or the dashboard would
+      // answer differently depending on whether Atlas happens to be up.
+      if (exactTerm && item.searchTerms?.includes(exactTerm)) return true;
+      if (exactOnly) return false;
+
       const haystack = [
         item.id,
         item.cveId,
@@ -88,6 +101,10 @@ function applyFilters(items, query) {
         item.description,
         item.vendor,
         item.product,
+        item.searchTerms?.join(' '),
+        item.vendors?.join(' '),
+        item.products?.join(' '),
+        item.packages?.map((p) => p.name).join(' '),
         item.cwes.join(' '),
         item.tags.join(' '),
         item.stack?.subjects.join(' '),
@@ -171,6 +188,22 @@ const feedMeta = (feed) => ({
  * Filter, sort and page the feed, falling back to a direct source lookup when
  * a search names a CVE the current window does not cover.
  */
+/**
+ * Whether the term names a package, so the dashboard can offer the
+ * version-aware check. Decided here rather than on the client, because this
+ * is where the vocabulary lives. Best-effort: a failure costs the offer, not
+ * the search.
+ */
+async function hintFor(query) {
+  const term = String(query.q ?? '').trim();
+  if (!term) return null;
+  try {
+    return await packageHintFor(term);
+  } catch {
+    return null;
+  }
+}
+
 export async function queryFeed(query = {}) {
   let feed = await getFeed();
 
@@ -178,7 +211,7 @@ export async function queryFeed(query = {}) {
   // this page of records reaches the host.
   if (feed.value.stored) {
     const result = await queryFromStore(feed, query);
-    if (result) return result;
+    if (result) return withPackageHint(result, await hintFor(query));
     // The store was reachable when this snapshot was written but is not now.
     // Force a refresh; collect() falls back to memory when the database is
     // unreachable, so the request below is served from memory rather than
@@ -187,11 +220,23 @@ export async function queryFeed(query = {}) {
     if (feed.value.stored) {
       // The database recovered between the two calls; try it once more.
       const retry = await queryFromStore(feed, query);
-      if (retry) return retry;
+      if (retry) return withPackageHint(retry, await hintFor(query));
     }
   }
 
-  const filtered = applyFilters(feed.value.items ?? [], query);
+  // The same cascade the database path runs, for the same reason: the
+  // dashboard must not answer differently depending on whether Atlas is up.
+  // An exact name match wins outright; only when nothing carries the term as
+  // a name does it fall back to matching prose.
+  const pool = feed.value.items ?? [];
+  let memoryMatchedBy = 'words';
+  let filtered = [];
+
+  if (firstMode(query) === 'exact') {
+    filtered = applyFilters(pool, query, { mode: 'exact' });
+    if (filtered.length) memoryMatchedBy = 'exact';
+  }
+  if (!filtered.length) filtered = applyFilters(pool, query, { mode: 'words' });
 
   const sortKey = String(query.sort ?? 'priority');
   const comparator = comparators[sortKey] ?? comparators.priority;
@@ -221,10 +266,13 @@ export async function queryFeed(query = {}) {
     }
   }
 
-  return {
+  return withPackageHint(
+    {
     meta: {
       ...feedMeta(feed),
       sort: comparators[sortKey] ? sortKey : 'priority',
+      ...(memoryMatchedBy !== 'words' ? { matchedBy: memoryMatchedBy } : {}),
+      ...(String(query.q ?? '').trim() ? { q: String(query.q).trim() } : {}),
       total: sorted.length,
       totalUnfiltered: feed.value.items.length,
       page,
@@ -236,7 +284,15 @@ export async function queryFeed(query = {}) {
     sources: feed.value.sources,
     exploitSources: feed.value.exploitSources ?? [],
     items: sorted.slice(start, start + limit),
-  };
+    },
+    await hintFor(query),
+  );
+}
+
+/** Attach the package hint to a result's meta, if there is one. */
+function withPackageHint(result, hint) {
+  if (!hint) return result;
+  return { ...result, meta: { ...result.meta, packageHint: hint } };
 }
 
 const pocRepos = (item) => (item?.exploitation?.publicPoc ? pocLinksFor(item.cveId) : Promise.resolve([]));
@@ -262,14 +318,20 @@ async function queryFromStore(feed, query) {
   // the common case. When it does not and the store falls back to a substring
   // search, the counts have to be recomputed over that same filter, or the
   // facets would describe a result set the visitor is not looking at.
-  let [page, stats] = await Promise.all([queryRecords(query), aggregateStats(query)]);
+  // Both sides must assume the SAME stage, or the counts silently describe a
+  // different filter than the rows even when no recompute is triggered.
+  const assumed = firstMode(query);
+  let [page, stats] = await Promise.all([queryRecords(query), aggregateStats(query, { mode: assumed })]);
 
   // The database is unreachable. Return null so the caller can fall back to
   // memory rather than handing the visitor a 500.
   if (!page || !stats) return null;
 
-  if (page.matchedBy === 'substring') {
-    stats = (await aggregateStats(query, { substring: true })) ?? stats;
+  // The optimistic call above assumed the first stage would match. Whenever a
+  // later stage actually produced the rows, the counts describe a different
+  // result set and have to be redone against that stage's filter.
+  if (page.matchedBy && page.matchedBy !== assumed) {
+    stats = (await aggregateStats(query, { mode: page.matchedBy })) ?? stats;
   }
 
   let lookup = null;
@@ -297,6 +359,9 @@ async function queryFromStore(feed, query) {
       // How the term was matched, so the dashboard can say so: a substring
       // match means the indexed word search found nothing.
       ...(page.matchedBy && page.matchedBy !== 'words' ? { matchedBy: page.matchedBy } : {}),
+      // Echoed so the client can render notes about the term without having
+      // to trust its own input box, which may be mid-edit.
+      ...(String(query.q ?? '').trim() ? { q: String(query.q).trim() } : {}),
       total: lookup ? items.length : page.total,
       totalUnfiltered: feed.value.fetched ?? stats.total,
       page: page.page,

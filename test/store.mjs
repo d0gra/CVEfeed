@@ -182,6 +182,79 @@ try {
   const got = await signals.getSignals(['CVE-2026-0003', 'CVE-2026-0001']);
   check('signals store and come back by id', got.get('CVE-2026-0003')?.metasploit?.[0]?.url === 'https://example.com/module');
   check('  ...and an id with none is simply absent', !got.has('CVE-2026-0001'));
+  // A fourth record, added last on purpose: every assertion above counts
+  // records, and inserting this earlier silently changed all of them.
+  // --- exact name matching ---
+  // A fourth record carrying searchTerms, left off the first three so the
+  // existing assertions above keep testing the un-enriched path - which is
+  // also the real state of most of the corpus until it is re-ingested.
+  await store.upsertRecords([
+    record({
+      cveId: 'CVE-2026-0004',
+      title: 'An unrelated flaw in something else entirely',
+      description: 'Nothing here mentions the package by name.',
+      vendor: null,
+      product: null,
+      searchTerms: ['litellm', 'berriai'],
+      packages: [{ name: 'litellm', ecosystem: 'PyPI' }],
+      vendors: ['BerriAI'],
+    }),
+  ]);
+
+  const exact = await store.queryRecords({ q: 'litellm', limit: 50 });
+  check(
+    'an exact name match wins, even when no text mentions it',
+    exact.total === 1 && exact.matchedBy === 'exact' && exact.items[0].cveId === 'CVE-2026-0004',
+    `total=${exact.total} matchedBy=${exact.matchedBy}`,
+  );
+
+  const forced = await store.queryRecords({ q: 'litellm', match: 'words', limit: 50 });
+  check(
+    'match=words is a real escape hatch from exact-wins',
+    forced.matchedBy !== 'exact',
+    `matchedBy=${forced.matchedBy}`,
+  );
+
+  const caseless = await store.queryRecords({ q: 'LiteLLM', limit: 50 });
+  check('exact matching is case-insensitive', caseless.total === 1, `total=${caseless.total}`);
+
+  // The invariant that keeps the facet counts honest: whatever filter
+  // produced the rows must also produce the counts.
+  const exactStats = await store.aggregateStats({ q: 'litellm' }, { mode: 'exact' });
+  check(
+    'facet counts can be computed over the exact filter',
+    exactStats.total === exact.total,
+    `stats=${exactStats.total} rows=${exact.total}`,
+  );
+
+  check(
+    'the stage order is agreed by one shared rule',
+    store.firstMode({ q: 'litellm' }) === 'exact' &&
+      store.firstMode({ q: 'litellm', match: 'words' }) === 'words' &&
+      store.firstMode({ q: 'CVE-2026-0001' }) === 'words' &&
+      store.firstMode({}) === 'words',
+  );
+
+  // "it returned the right rows" and "it did not scan the collection" are
+  // different claims, and on a free tier only the second one scales.
+  const plan = await (await getDb())
+    .collection('cves')
+    .find(store.buildFilter({ q: 'litellm' }, { mode: 'exact' }))
+    .explain('queryPlanner');
+  const stage = JSON.stringify(plan?.queryPlanner?.winningPlan ?? {});
+  check('the exact stage uses an index rather than scanning', stage.includes('IXSCAN'), stage.slice(0, 90));
+
+  const terms = await store.queryRecords({ q: 'berriai', limit: 50 });
+  check('a vendor name is matched exactly too', terms.total === 1 && terms.matchedBy === 'exact');
+
+  const vocab = await store.aggregateSuggestionVocabulary();
+  check(
+    'the suggestion vocabulary is aggregated from the corpus',
+    vocab.packages.some((p) => p.value === 'litellm' && p.ecosystem === 'PyPI') &&
+      vocab.vendors.some((v) => v.value === 'BerriAI'),
+    `packages=${vocab.packages.length} vendors=${vocab.vendors.length}`,
+  );
+
 } finally {
   const db = await getDb();
   await db?.dropDatabase().catch(() => {});
