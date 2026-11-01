@@ -311,7 +311,7 @@ async function storageStatus() {
   let osv;
   try {
     [records, osv] = await Promise.all([
-      storeCounts().then((c) => c?.records),
+      storeCounts(),
       // The dependency sweep's own cache, so a caller can see whether a repeat
       // sweep will be cheap.
       osvStoreStats().catch(() => null),
@@ -319,7 +319,21 @@ async function storageStatus() {
   } catch {
     /* counting is a nicety, not a requirement */
   }
-  return { mode: 'database', storedRecords: records, ...(osv ? { dependencyCache: osv } : {}) };
+  return {
+    mode: 'database',
+    storedRecords: records?.records,
+    // How much of the corpus can be found by package or vendor name. Names
+    // are only derived as records are re-ingested, so this climbs over time
+    // rather than being complete at deploy - an agent reading an empty
+    // name-search result should be able to see that.
+    ...(records?.withSearchTerms != null
+      ? {
+          searchableByName: records.withSearchTerms,
+          nameCoverage: 'Package and vendor names are derived as records are re-ingested, so this trails the record count.',
+        }
+      : {}),
+    ...(osv ? { dependencyCache: osv } : {}),
+  };
 }
 
 async function safeCommunityPocs(cveId) {

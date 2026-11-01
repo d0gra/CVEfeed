@@ -8,7 +8,7 @@
 import config from './config.js';
 import { comparators, getFeed } from './aggregate.js';
 import { SEVERITY_ORDER } from './lib/severity.js';
-import { isCveId, lookupCve } from './lookup.js';
+import { isCveId, isNameQuery, lookupByName, lookupCve } from './lookup.js';
 import { STACK_CATEGORY_IDS } from './stack.js';
 import { attachSignals, MATURITY, pocLinksFor } from './exploits.js';
 import { aggregateStats, findRecordById, firstMode, queryRecords, upsertRecords } from './store/cveStore.js';
@@ -251,6 +251,21 @@ export async function queryFeed(query = {}) {
   // nothing - this is the most common thing a visitor types.
   let lookup = null;
   const term = String(query.q ?? '').trim();
+
+  // Same name fallback as the database path, so the degraded mode answers the
+  // same question rather than a smaller one.
+  if (!isCveId(term) && (sorted.length === 0 || (sorted.length < WEAK_MATCH && isNameQuery(term)))) {
+    const byName = await nameFallback(query);
+    if (byName) {
+      const seen = new Set(sorted.map((i) => i.cveId ?? i.id));
+      for (const found of byName.items) {
+        if (!seen.has(found.cveId ?? found.id)) sorted.push(found);
+      }
+      lookup = byName.lookup;
+      sorted.sort(comparator);
+    }
+  }
+
   if (sorted.length === 0 && isCveId(term)) {
     try {
       const found = await lookupCve(term);
@@ -312,6 +327,57 @@ async function persistLookup(item) {
   }
 }
 
+/**
+ * A search that found nothing, answered from the registers instead.
+ *
+ * The corpus only holds what has been ingested since it started, which for
+ * most software is long after its last CVE - so "no results" for a product
+ * name usually means "we never fetched that", and reads to the visitor as
+ * "nothing is wrong with it". That is the worst possible way for a
+ * vulnerability feed to be wrong, so a name that found nothing is looked up
+ * once, kept, and answered properly from then on.
+ *
+ * Always resolves. A throttled or failed lookup leaves the empty result as it
+ * was rather than turning a quiet answer into an error.
+ */
+/**
+ * Below this many hits, a name query is checked against the registers.
+ *
+ * Not only when nothing matched. An exact match on one stored record is
+ * high-confidence about relevance and says nothing about completeness - the
+ * corpus might hold this morning's DefectDojo advisory and know nothing of
+ * the three before it. A handful of incidental substring hits are worth
+ * re-asking for the same reason. Bounded by the lookup cache (one fetch per
+ * name per 12 hours) and the shared token bucket.
+ */
+const WEAK_MATCH = 5;
+
+async function nameFallback(query) {
+  const term = String(query.q ?? '').trim();
+  if (!isNameQuery(term)) return null;
+
+  try {
+    const found = await lookupByName(term);
+    const items = (found.value.items ?? []).filter((item) => item?.key);
+    if (!items.length) return null;
+
+    await attachSignals(items);
+    // Kept so the second search for this name is served from the store.
+    for (const item of items) await persistLookup(item);
+
+    return {
+      items,
+      lookup: {
+        byName: term,
+        sources: found.value.sources?.filter((s) => s.ok && s.count).map((s) => s.name) ?? [],
+        lookedUpAt: found.value.lookedUpAt,
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** The same shape queryFeed has always returned, assembled by the database. */
 async function queryFromStore(feed, query) {
   // Computed together, on the assumption the indexed search matches - which is
@@ -337,6 +403,31 @@ async function queryFromStore(feed, query) {
   let lookup = null;
   const items = [...page.items];
   const term = String(query.q ?? '').trim();
+
+  // A name nobody has searched before: ask the registers, keep what comes
+  // back, and answer from it. Only once per term - the lookup is cached,
+  // misses included.
+  //
+  // Nothing found is the obvious trigger. The other one is a weak match: the
+  // substring stage is a scan that happily matches a name mentioned in
+  // passing inside an unrelated advisory, and a single incidental hit like
+  // that would otherwise suppress the lookup and leave the visitor with one
+  // wrong answer instead of the real ones.
+  if (!isCveId(term) && (page.total === 0 || (page.total < WEAK_MATCH && isNameQuery(term)))) {
+    const byName = await nameFallback(query);
+    if (byName) {
+      const seen = new Set(items.map((i) => i.cveId ?? i.id));
+      for (const found of byName.items) {
+        if (!seen.has(found.cveId ?? found.id)) items.push(found);
+      }
+      lookup = byName.lookup;
+      // The store returned these already sorted; the fetched ones arrive in
+      // whatever order the register gave them, so the merged set has to be
+      // sorted again or a 2006 CVE lands above this morning's.
+      const comparator = comparators[page.sort] ?? comparators.priority;
+      items.sort(comparator);
+    }
+  }
 
   if (items.length === 0 && isCveId(term)) {
     try {

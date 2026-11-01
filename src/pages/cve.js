@@ -8,6 +8,7 @@
  */
 import { breadcrumbJsonLd, escapeHtml, layout, truncate } from './layout.js';
 import { pocSection } from './pocSection.js';
+import { slugFor } from './hubs.js';
 
 const SOURCE_LABELS = {
   nvd: 'NVD',
@@ -40,6 +41,33 @@ export function cveSummary(item, id) {
   return truncate(`${head} ${item.description || item.title || ''}`, 158);
 }
 
+/**
+ * The affected software, linked to its own page where one exists.
+ *
+ * This is the internal linking that makes thousands of CVE pages crawlable:
+ * without it they are reachable only from a sitemap and a client-rendered
+ * dashboard, which is a poor structure however good each page is. Rendered as
+ * raw HTML, so this value skips the table's escaping and does its own.
+ */
+function affectedLinks(item) {
+  const parts = [];
+  for (const vendor of item.vendors ?? []) {
+    parts.push(`<a href="/vendor/${slugFor(vendor)}">${escapeHtml(vendor)}</a>`);
+  }
+  for (const product of (item.products ?? []).slice(0, 4)) {
+    parts.push(`<a href="/product/${slugFor(product)}">${escapeHtml(product)}</a>`);
+  }
+  for (const pkg of (item.packages ?? []).slice(0, 4)) {
+    parts.push(`<a href="/package/${slugFor(pkg.name)}">${escapeHtml(pkg.name)}</a>`);
+  }
+  if (parts.length) return { html: parts.join(' \u00b7 ') };
+
+  // Older records predate the structured names and only have the joined
+  // strings; they still deserve a line, just without links.
+  const plain = [item.vendor, item.product].filter(Boolean).join(' \u00b7 ');
+  return plain || null;
+}
+
 function factsTable(item) {
   const rows = [
     ['CVSS', item.score != null ? `${item.score}${item.scoreVersion ? ` (v${item.scoreVersion})` : ''}` : 'Not yet scored'],
@@ -49,13 +77,16 @@ function factsTable(item) {
     ['Exploit availability', item.exploitation ? item.exploitation.evidence.join(', ') : 'Nothing found in Exploit-DB, Metasploit, Nuclei or public PoC repositories'],
     ['Published', fullDate(item.published)],
     ['Last updated', fullDate(item.modified)],
-    ['Affected', [item.vendor, item.product].filter(Boolean).join(' · ') || null],
+    ['Affected', affectedLinks(item)],
     ['Weakness', item.cwes?.length ? item.cwes.join(', ') : null],
     ['Assigner', item.assigner],
   ].filter(([, v]) => v);
 
   return `<dl class="facts-table">${rows
-    .map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`)
+    .map(
+      ([k, v]) =>
+        `<div><dt>${escapeHtml(k)}</dt><dd>${v?.html ? v.html : escapeHtml(v)}</dd></div>`,
+    )
     .join('')}</dl>`;
 }
 
@@ -147,11 +178,95 @@ function stackBlock(item) {
   </section>`;
 }
 
+/**
+ * The headline, chosen by what the page can actually answer.
+ *
+ * "CVE-X exploit" and "CVE-X PoC" are what people type, and a page carrying a
+ * Metasploit module and three PoC repositories genuinely deserves those
+ * words. Putting them on the other nine records in ten would be the
+ * mass-produced, promises-nothing page that search engines demote whole
+ * domains for - and it would be a lie besides, which is the better reason.
+ *
+ * So the claim follows the evidence, strongest first. The reward for being
+ * accurate is that the pages which do rank are the ones that answer the
+ * query.
+ */
+function headlineFor(item, id) {
+  const x = item.exploitation;
+  const has = (kind) => x?.[kind] === true;
+
+  if (item.exploited) return `${id} — actively exploited in the wild`;
+  if (has('weaponized')) return `${id} — Metasploit module and public exploit`;
+  if (has('publicExploit')) return `${id} — public exploit available`;
+  if (has('publicPoc')) return `${id} — proof of concept and exploit details`;
+  if (has('scannable')) return `${id} — detection template and advisory`;
+  if (item.score != null) return `${id} — CVSS ${item.score} ${severityWord(item).toLowerCase()} advisory`;
+  return `${id} — advisory, affected versions and detection`;
+}
+
+/**
+ * Questions this page can answer, as structured data.
+ *
+ * Only ever questions with a real answer on the page - "is there a public
+ * exploit" is worth marking up precisely because the answer is sometimes no,
+ * and a confident no is a useful result.
+ */
+function faqFor(item, id, pocRepos, communityPocs) {
+  const x = item.exploitation;
+  const qa = [];
+
+  const exploitAnswer = item.exploited
+    ? `Yes. ${id} is listed in the CISA Known Exploited Vulnerabilities catalog, meaning exploitation has been observed in the wild.`
+    : x?.weaponized
+      ? `Yes. A Metasploit module exists for ${id}, so a working exploit is available in a standard testing framework.`
+      : x?.publicExploit
+        ? `Yes. An exploit for ${id} is archived and downloadable from Exploit-DB.`
+        : x?.publicPoc
+          ? `Yes. Proof-of-concept code for ${id} has been published publicly.`
+          : `No public exploit for ${id} was found in Exploit-DB, Metasploit, Nuclei templates or public proof-of-concept repositories. That is an absence of evidence rather than proof that none exists.`;
+
+  qa.push([`Is there a public exploit for ${id}?`, exploitAnswer]);
+
+  const pocCount = (pocRepos?.length ?? 0) + (communityPocs?.length ?? 0);
+  if (pocCount) {
+    qa.push([
+      `Is there a proof of concept for ${id}?`,
+      `Yes — ${pocCount} proof-of-concept ${pocCount === 1 ? 'entry is' : 'entries are'} linked on this page, from public repositories and community submissions. They are listed for authorised testing only.`,
+    ]);
+  }
+
+  if (item.score != null) {
+    qa.push([
+      `How severe is ${id}?`,
+      `${id} scores CVSS ${item.score}${item.scoreVersion ? ` (v${item.scoreVersion})` : ''}, rated ${severityWord(item).toLowerCase()}.` +
+        (Number.isFinite(item.epss) ? ` EPSS puts the chance of exploitation in the next 30 days at ${item.epss}%.` : ''),
+    ]);
+  }
+
+  if (item.vendor || item.product) {
+    qa.push([
+      `What does ${id} affect?`,
+      `${id} affects ${[item.vendor, item.product].filter(Boolean).join(' ')}.` +
+        (item.stack?.subjects?.length ? ` It is part of the AI and agent stack (${item.stack.subjects.join(', ')}).` : ''),
+    ]);
+  }
+
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    mainEntity: qa.map(([question, answer]) => ({
+      '@type': 'Question',
+      name: question,
+      acceptedAnswer: { '@type': 'Answer', text: answer },
+    })),
+  };
+}
+
 export function cvePage({ item, id, origin, canonical, lookedUp, assetVersion, pocRepos = [], communityPocs = [], captcha }) {
   // Search results cut titles near 60 characters, and these advisories carry
-  // long machine-written ones, so the headline is trimmed hard. The full title
-  // is still the <h1>.
-  const title = `${id}: ${truncate(item.title, 46)}`;
+  // long machine-written ones, so the headline leads with what the page
+  // answers and the full advisory title stays as the <h1>.
+  const title = headlineFor(item, id);
   const description = cveSummary(item, id);
 
   const links = Object.entries(item.links ?? {}).filter(([, url]) => url);
@@ -256,7 +371,11 @@ export function cvePage({ item, id, origin, canonical, lookedUp, assetVersion, p
     body,
     current: '',
     assetVersion,
-    jsonLd: [article, breadcrumbJsonLd(origin, [['Feed', '/'], [id, `/cve/${encodeURIComponent(id)}`]])],
+    jsonLd: [
+      article,
+      faqFor(item, id, pocRepos, communityPocs),
+      breadcrumbJsonLd(origin, [['Feed', '/'], [id, `/cve/${encodeURIComponent(id)}`]]),
+    ],
   });
 }
 

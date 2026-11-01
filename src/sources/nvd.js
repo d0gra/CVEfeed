@@ -121,6 +121,28 @@ export async function fetchItems() {
   return items;
 }
 
+/**
+ * Find CVEs by software name.
+ *
+ * The feed is a forward-accumulating window, so anything published before the
+ * store started holding records is invisible to a name search however good
+ * the matching is - and for most software the last CVE is months old. This is
+ * the way out: NVD's keyword search covers the whole catalogue, so a name
+ * nobody has asked about before can still be answered once.
+ *
+ * `keywordSearch` ANDs the words, which suits a product name and would make
+ * a sentence match nothing - the caller is expected to pass a name, and
+ * guards for that before spending a request here.
+ */
+export async function searchByName(term, { limit = 40 } = {}) {
+  const headers = config.nvdApiKey ? { apiKey: config.nvdApiKey } : {};
+  const data = await fetchJson(
+    `${API}?resultsPerPage=${Math.min(limit, 100)}&keywordSearch=${encodeURIComponent(term)}`,
+    { headers, retries: 1 },
+  );
+  return (data.vulnerabilities ?? []).map(normalize).filter(Boolean);
+}
+
 /** Fetch one CVE directly, for lookups outside the feed window. */
 export async function lookupById(cveId) {
   const headers = config.nvdApiKey ? { apiKey: config.nvdApiKey } : {};
@@ -131,4 +153,4 @@ export async function lookupById(cveId) {
   return (data.vulnerabilities ?? []).map(normalize).filter(Boolean);
 }
 
-export default { meta, fetchItems, lookupById };
+export default { meta, fetchItems, lookupById, searchByName };

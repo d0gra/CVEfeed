@@ -11,12 +11,12 @@ import { getFeed } from '../aggregate.js';
 import { findRecord, queryFeed } from '../query.js';
 import { isCveId } from '../lookup.js';
 import { STACK_CATEGORIES } from '../stack.js';
-import { listIdsForSitemap } from '../store/cveStore.js';
+import { hubNames, listIdsForSitemap, recordsForName } from '../store/cveStore.js';
 import { approvedPocsForCve } from '../store/pocStore.js';
 import { issueChallenge, turnstileSiteKey, usingTurnstile } from '../lib/captcha.js';
 import { originFor } from '../pages/layout.js';
 import { cvePage, notFoundPage } from '../pages/cve.js';
-import { agentsPage, depsPage, earnPage, exploitedPage, moderatePage, stackCategoryPage, stackIndexPage, termsPage } from '../pages/index.js';
+import { agentsPage, depsPage, earnPage, exploitedPage, hubIndexPage, hubPage, moderatePage, slugFor, stackCategoryPage, stackIndexPage, termsPage } from '../pages/index.js';
 
 const router = Router();
 
@@ -43,6 +43,77 @@ router.get('/dependencies', (req, res) => {
 
 // The name people reach for; one canonical URL for the page itself.
 router.get(['/deps', '/dependency-check'], (_req, res) => res.redirect(301, '/dependencies'));
+
+/**
+ * Hubs: one page per vendor, product and package.
+ *
+ * Cached names rather than a query per request - the index aggregation is the
+ * same one the typeahead uses, and a crawler walking several hundred of these
+ * should not be several hundred aggregations.
+ */
+const HUB_PATHS = { vendor: 'vendor', product: 'product', package: 'package' };
+
+for (const [kind, path] of Object.entries(HUB_PATHS)) {
+  router.get(`/${path}`, async (req, res, next) => {
+    try {
+      const names = await hubNames();
+      if (!names) return html(res, notFoundPage({ id: path, origin: originFor(req), canonical: '', assetVersion }), 404);
+      const origin = originFor(req);
+      html(res, hubIndexPage({ kind, names: names[`${kind}s`] ?? [], origin, canonical: `${origin}/${path}`, assetVersion }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get(`/${path}/:name`, async (req, res, next) => {
+    const raw = String(req.params.name ?? '').trim();
+    const origin = originFor(req);
+
+    // One URL per name: a hub is reachable only at its lowercase slug.
+    const slug = slugFor(decodeURIComponent(raw));
+    if (encodeURIComponent(decodeURIComponent(raw)) !== slug) {
+      return res.redirect(301, `/${path}/${slug}`);
+    }
+
+    try {
+      const name = decodeURIComponent(raw);
+      const found = await recordsForName(kind, name);
+      // A name on one record has nothing to aggregate, so it gets no page
+      // rather than a thin one.
+      if (!found || found.total < 2) {
+        return html(res, notFoundPage({ id: name, origin, canonical: `${origin}/${path}/${slug}`, assetVersion }), 404);
+      }
+
+      // The display spelling comes from the records, not from the URL.
+      const field = { vendor: 'vendors', product: 'products', package: 'packages' }[kind];
+      const display =
+        kind === 'package'
+          ? found.items[0].packages?.find((p) => p.name.toLowerCase() === name.toLowerCase())?.name ?? name
+          : found.items[0][field]?.find((v) => v.toLowerCase() === name.toLowerCase()) ?? name;
+
+      const all = await hubNames();
+      const related = (all?.[`${kind}s`] ?? [])
+        .filter((n) => n.value.toLowerCase() !== name.toLowerCase())
+        .slice(0, 24);
+
+      html(
+        res,
+        hubPage({
+          kind,
+          name: display,
+          items: found.items,
+          total: found.total,
+          origin,
+          canonical: `${origin}/${path}/${slug}`,
+          assetVersion,
+          related,
+        }),
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+}
 
 router.get('/cve/:id', async (req, res, next) => {
   const raw = String(req.params.id ?? '').trim();
@@ -206,6 +277,11 @@ router.get('/robots.txt', (req, res) => {
         'Allow: /earn',
         'Allow: /terms',
         'Allow: /mcp',
+        'Allow: /dependencies',
+        // The hubs aggregate, so they are the pages worth crawling first.
+        'Allow: /vendor',
+        'Allow: /product',
+        'Allow: /package',
         'Allow: /llms.txt',
         '',
         '# Filtered views are the same records in a different order, and the',
@@ -230,6 +306,9 @@ router.get('/sitemap.xml', async (req, res, next) => {
       { loc: `${origin}/ai-stack`, priority: '0.9', changefreq: 'daily' },
       { loc: `${origin}/exploited`, priority: '0.9', changefreq: 'daily' },
       { loc: `${origin}/dependencies`, priority: '0.9', changefreq: 'weekly' },
+      { loc: `${origin}/vendor`, priority: '0.8', changefreq: 'daily' },
+      { loc: `${origin}/product`, priority: '0.8', changefreq: 'daily' },
+      { loc: `${origin}/package`, priority: '0.8', changefreq: 'daily' },
       { loc: `${origin}/mcp`, priority: '0.8', changefreq: 'weekly' },
       { loc: `${origin}/earn`, priority: '0.7', changefreq: 'monthly' },
       { loc: `${origin}/terms`, priority: '0.3', changefreq: 'yearly' },
@@ -243,6 +322,24 @@ router.get('/sitemap.xml', async (req, res, next) => {
     // Only records actually in the window: a sitemap should list pages that
     // exist, not every CVE ever issued. Two records can still resolve to the
     // same page, so the set is deduplicated rather than merely sorted.
+    // One entry per hub. These aggregate, so they are worth more to a crawler
+    // than any single record and are listed ahead of them.
+    try {
+      const names = await hubNames();
+      for (const [kind, path] of Object.entries(HUB_PATHS)) {
+        for (const entry of names?.[`${kind}s`] ?? []) {
+          urls.push({
+            loc: `${origin}/${path}/${slugFor(entry.value)}`,
+            priority: '0.7',
+            changefreq: 'daily',
+            lastmod: String(entry.modified ?? '').slice(0, 10) || undefined,
+          });
+        }
+      }
+    } catch {
+      // A sitemap without hubs is still a valid sitemap.
+    }
+
     const seen = new Set(urls.map((u) => u.loc));
     const records = feed.value.stored
       ? await listIdsForSitemap(5000)

@@ -335,7 +335,15 @@ export function buildFilter(query = {}, { substring = false, mode } = {}) {
   // Records resolved by a direct lookup are kept so they are never searched
   // upstream twice, but they are not part of the current window: they surface
   // only when asked for by id, never in the browsable listing or its counts.
-  if (!IDENTIFIER.test(term)) and.push({ outsideWindow: { $ne: true } });
+  // Records resolved by a direct lookup are kept but held out of the
+  // *browsable* listing - they are not part of the current window and would
+  // turn "what shipped recently" into "everything anyone ever looked up".
+  //
+  // A search is a different act. Someone typing a product name is asking what
+  // we know, not what is new, and excluding these there would mean a name
+  // lookup could fetch records that the very next search could not see. So
+  // the exclusion applies to browsing, not to searching.
+  if (!term) and.push({ outsideWindow: { $ne: true } });
 
   return and.length ? { $and: and } : {};
 }
@@ -591,6 +599,76 @@ export async function aggregateSuggestionVocabulary({ limit = 2000 } = {}) {
   };
 }
 
+/**
+ * Records naming one vendor, product or package.
+ *
+ * A hub page per name is the bulk of this site's indexable surface: "microsoft
+ * vulnerabilities" is a far commoner search than any single CVE id, and until
+ * the names were kept as structured data there was nothing to build one from.
+ */
+export async function recordsForName(kind, value, { limit = 60 } = {}) {
+  const col = await collection();
+  if (!col) return null;
+
+  const field = { vendor: 'vendors', product: 'products', package: 'packages.name' }[kind];
+  if (!field) return null;
+
+  // Case-insensitive, because a hub's URL is a slug and the stored name keeps
+  // its own capitalisation.
+  const pattern = new RegExp(`^${escapeRegex(String(value))}$`, 'i');
+  const filter = { [field]: pattern };
+
+  const [rows, total] = await Promise.all([
+    col.find(filter).sort(SORTS.priority).limit(limit).toArray(),
+    col.countDocuments(filter),
+  ]);
+
+  return { items: rows.map(({ _id, ...rest }) => ({ key: _id, ...rest })), total };
+}
+
+/**
+ * The names worth giving a page of their own.
+ *
+ * Thresholded: a name on a single record has nothing to aggregate, and a page
+ * per one-off would be exactly the thin, mass-produced surface that gets a
+ * domain demoted rather than ranked.
+ */
+export async function hubNames({ min = 2, limit = 400 } = {}) {
+  const col = await collection();
+  if (!col) return null;
+
+  // `unwind` is the array; `key` is what to group by once it is unwound.
+  // Packages are objects, so unwinding `packages.name` would yield nothing -
+  // the array has to be opened first and the field read off each element.
+  const branch = (unwind, key = unwind) => [
+    { $unwind: `$${unwind}` },
+    { $group: { _id: `$${key}`, n: { $sum: 1 }, modified: { $max: '$modified' } } },
+    { $match: { n: { $gte: min } } },
+    { $sort: { n: -1 } },
+    { $limit: limit },
+  ];
+
+  const [result] = await col
+    .aggregate([
+      { $match: { outsideWindow: { $ne: true } } },
+      {
+        $facet: {
+          vendors: branch('vendors'),
+          products: branch('products'),
+          packages: branch('packages', 'packages.name'),
+        },
+      },
+    ])
+    .toArray();
+
+  const shape = (rows) => (rows ?? []).map((r) => ({ value: r._id, count: r.n, modified: r.modified }));
+  return {
+    vendors: shape(result?.vendors),
+    products: shape(result?.products),
+    packages: shape(result?.packages),
+  };
+}
+
 /** Identifiers only, for the sitemap: the documents themselves are not needed. */
 export async function listIdsForSitemap(limit = 5000) {
   const col = await collection();
@@ -626,6 +704,8 @@ export default {
   findRecordsByIds,
   canRetryAsSubstring,
   aggregateSuggestionVocabulary,
+  recordsForName,
+  hubNames,
   listIdsForSitemap,
   storeReady,
   storeCounts,

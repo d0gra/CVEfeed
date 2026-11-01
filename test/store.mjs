@@ -247,6 +247,50 @@ try {
   const terms = await store.queryRecords({ q: 'berriai', limit: 50 });
   check('a vendor name is matched exactly too', terms.total === 1 && terms.matchedBy === 'exact');
 
+  // --- hubs ---
+  // A second record sharing the vendor, because a hub only exists for a name
+  // that appears more than once - a page per one-off would be exactly the
+  // thin surface the hubs are meant not to be.
+  await store.upsertRecords([
+    record({
+      cveId: 'CVE-2026-0005',
+      title: 'Another BerriAI issue',
+      searchTerms: ['litellm', 'berriai'],
+      packages: [{ name: 'litellm', ecosystem: 'PyPI' }],
+      vendors: ['BerriAI'],
+    }),
+  ]);
+
+  const byVendor = await store.recordsForName('vendor', 'berriai');
+  check(
+    'a hub finds its records case-insensitively',
+    byVendor.total === 2 && byVendor.items.every((i) => i.vendors.includes('BerriAI')),
+    `total=${byVendor.total}`,
+  );
+
+  const byPackage = await store.recordsForName('package', 'LiteLLM');
+  check('a package hub matches on the coordinate name', byPackage.total === 2, `total=${byPackage.total}`);
+
+  check('an unknown hub name returns nothing, not everything', (await store.recordsForName('vendor', 'nope')).total === 0);
+  check('an unknown hub kind is refused', (await store.recordsForName('nonsense', 'x')) === null);
+
+  const hubs = await store.hubNames({ min: 2 });
+  check(
+    'hub names are listed with their counts',
+    hubs.vendors.some((v) => v.value === 'BerriAI' && v.count === 2),
+    JSON.stringify(hubs.vendors),
+  );
+  check(
+    'packages are unwound as objects, not as a missing path',
+    hubs.packages.some((p) => p.value === 'litellm' && p.count === 2),
+    JSON.stringify(hubs.packages),
+  );
+  check(
+    'a name on a single record gets no hub',
+    !hubs.vendors.some((v) => v.count < 2),
+    JSON.stringify(hubs.vendors.map((v) => v.count)),
+  );
+
   const vocab = await store.aggregateSuggestionVocabulary();
   check(
     'the suggestion vocabulary is aggregated from the corpus',

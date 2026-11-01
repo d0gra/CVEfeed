@@ -9,6 +9,7 @@ import { mountMcp } from './mcp.js';
 import { createLimiter } from './lib/ratelimit.js';
 import pages, { agentsPageHandler, assetVersionValue, setAssetVersion } from './routes/pages.js';
 import { closeMongo, mongoStatus } from './lib/mongo.js';
+import { storeIndexWarnings } from './store/cveStore.js';
 import { missingPage, originFor } from './pages/index.js';
 import { llmsTxt } from './llms.js';
 import { getFeed, feedCacheStatus } from './aggregate.js';
@@ -109,6 +110,12 @@ export function createApp() {
       // allowlist, or the host firewalling outbound 27017), whereas an auth
       // error means the credentials are wrong. It saves guessing.
       mongo: mongoStatus(),
+      // Indexes that could not be created, and a text index whose live spec
+      // has drifted from the one in the source. Both used to be swallowed
+      // silently, which meant the app booted green on whatever indexes
+      // happened to already exist. Read from memory, so this costs nothing
+      // and never makes a health check slow.
+      indexWarnings: storeIndexWarnings(),
     });
   });
 
