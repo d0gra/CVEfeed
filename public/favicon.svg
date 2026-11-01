@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="CVE Feed">
+  <!--
+    A pulse: something detected, still radiating.
+
+    Chosen over the obvious shield or bug because this is a feed, not a
+    guarantee - the mark should read as live monitoring rather than
+    protection. Geometry only, no letterforms: a glyph at 16px is mush, and
+    the wordmark already carries the name.
+
+    Sized for the smallest case rather than the prettiest one. A favicon is
+    seen at 16px far more often than anywhere else, so the dot is deliberately
+    large, the rings are only two, and their opacity is high enough to survive
+    being drawn at half a pixel of stroke. It looks slightly heavy at 128px,
+    which is the right trade.
+  -->
+  <rect width="32" height="32" rx="7" fill="#0c0d10"/>
+  <g fill="none" stroke="#e8e6e3" stroke-linecap="round" stroke-width="2.2">
+    <path d="M11.4 22.1a8.6 8.6 0 0 1 0-12.2" opacity=".62"/>
+    <path d="M20.6 9.9a8.6 8.6 0 0 1 0 12.2" opacity=".62"/>
+    <path d="M7.6 26a13.3 13.3 0 0 1 0-20" opacity=".3"/>
+    <path d="M24.4 6a13.3 13.3 0 0 1 0 20" opacity=".3"/>
+  </g>
+  <circle cx="16" cy="16" r="5" fill="#d2694f"/>
+</svg>

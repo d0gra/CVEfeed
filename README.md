@@ -1,15 +1,67 @@
-# CVE Feed
+<div align="center">
 
-A live vulnerability dashboard that aggregates CVE data from five trusted public
-sources. **No build step, no API keys required.** It runs with no database at
-all, holding the feed in memory with a JSON snapshot on disk — or, pointed at a
-MongoDB instance, [keeps almost nothing on the host](#storage).
+```
+ ██████ ██    ██ ███████     ███████ ███████ ███████ ██████
+██      ██    ██ ██          ██      ██      ██      ██   ██
+██      ██    ██ █████       █████   █████   █████   ██   ██
+██       ██  ██  ██          ██      ██      ██      ██   ██
+ ██████   ████   ███████     ██      ███████ ███████ ██████
+```
 
-Vulnerabilities in the AI and agent stack - inference servers, agent
-frameworks, MCP servers, vector stores - get [a facet of their own](#the-ai-stack),
-and the whole feed is [consumable by agents over MCP](#mcp).
+### **[cve.zerocrew.in](https://cve.zerocrew.in)**
 
-Built to drop onto Hostinger's Node.js hosting with `npm install` + `npm start`.
+**Arm your agents with knowledge of vulnerabilities — and the exploits that exist for them.**
+
+[![live](https://img.shields.io/badge/live-cve.zerocrew.in-d2694f?style=flat-square)](https://cve.zerocrew.in)
+[![mcp](https://img.shields.io/badge/MCP-6_tools-5a9c98?style=flat-square)](https://cve.zerocrew.in/mcp)
+[![sources](https://img.shields.io/badge/registers-5_merged-6e6d6a?style=flat-square)](#sources)
+[![licence](https://img.shields.io/badge/licence-noncommercial-9c5f12?style=flat-square)](#licence)
+[![no key](https://img.shields.io/badge/API_key-not_required-5f9b7e?style=flat-square)](#mcp)
+
+</div>
+
+---
+
+A model knows vulnerabilities up to its training cut-off and nothing after it,
+which makes it a junior analyst reciting last year's news. Point an agent at
+this endpoint and it gets what a good operator actually carries in their head:
+what landed overnight, whether anyone has written working code for it, where
+that code is, and which of the things you ship it lands on.
+
+```bash
+claude mcp add --transport http cvefeed https://cve.zerocrew.in/mcp
+```
+
+No account. No API key. Any MCP client works.
+
+## What makes it different from a CVE list
+
+Most feeds stop at "here is a CVE with a CVSS score". A score does not tell you
+whether someone can run an attack this afternoon.
+
+- **Exploit intelligence on every record** — whether exploitation has been
+  *observed in the wild*, *weaponized* into a Metasploit module, archived as a
+  *public exploit*, or published as *proof-of-concept* code, plus whether a
+  Nuclei template means it is scanned for at internet scale. Sort by that and
+  a 7.5 with a ready-made module correctly outranks a 9.8 nobody has written
+  anything for.
+- **A dependency check that knows versions** — paste a lockfile and every
+  package is resolved at its exact installed version through OSV.dev, then
+  ordered by whether exploit code exists. Unlike `npm audit`, the answer is a
+  worklist of four rather than a wall of forty. See [Dependency check](#dependency-check).
+- **Search by the names software actually has** — package coordinates, vendors
+  and products are kept as structured data, so `litellm` matches the package
+  rather than the word. A name nobody has asked about before is fetched from
+  the registers once and kept. See [Search](#search).
+- **A facet for the AI and agent stack** — inference servers, agent
+  frameworks, MCP servers, vector stores, MLOps. Young code shipping fast, and
+  the surface least picked over. See [The AI stack](#the-ai-stack).
+- **Community proofs of concept**, reviewed before publication. See
+  [Community proofs of concept](#community-proofs-of-concept).
+
+Runs with no build step. It will run with no database at all, holding the feed
+in memory with a JSON snapshot on disk — but it is [built around MongoDB](#storage),
+and that is what makes the corpus accumulate instead of forgetting.
 
 ## Sources
 
@@ -46,28 +98,95 @@ and fully populated shortly after.
 
 ## Search
 
-Free-text search (`cisco`, `CWE-190`, a package name) filters the current
-window. A **CVE identifier** is treated differently: if it is not in the window,
-`NVD`, `CISA KEV`, `GitHub` and `EUVD` are each asked for that one CVE in
-parallel and the answers are merged by the same rules the feed uses, so
-Log4Shell resolves as readily as something published this morning.
+Three stages, cheapest and most precise first, stopping at the first that
+matches anything:
+
+1. **Exact name** — the term *is* a package, vendor or product name. Package
+   coordinates from GitHub Advisories, vendors and products from KEV and EUVD
+   are kept as structured data rather than flattened into prose, so `litellm`
+   matches the package and not the word. One indexed equality.
+2. **Words** — a MongoDB text index over titles, descriptions, vendors and
+   products.
+3. **Substring** — a scan, for a term inside a word: `log4j` inside
+   *Log4Shell*.
+
+An exact match wins outright, which is the point — but it *hides* the text
+matches, so the dashboard says so and offers `&match=words` to search
+everything. On `microsoft` that is the difference between 94 records
+attributed to Microsoft and 244 that merely mention the word.
+
+A **typeahead** suggests real names as you type, from the curated AI-stack
+taxonomy (which works even with the database down) merged with the corpus
+vocabulary, rebuilt a few times a day rather than queried per keystroke.
+
+### When the corpus has never heard of it
+
+The feed accumulates forward from the day it started storing, so for most
+software the last CVE predates the corpus entirely — and "no results" for a
+product name reads as "nothing is wrong with it", which is the worst way for a
+vulnerability feed to be wrong.
+
+So a name query that returns little or nothing is looked up against the
+registers once, kept, and answered properly from then on:
+
+```bash
+curl 'localhost:3000/api/feed?q=defectdojo'   # 4 records, oldest from 2023
+```
+
+Cached for twelve hours including the misses, and rate-limited through a
+shared token bucket, so a spray of distinct terms cannot drain the upstream
+budget. A **CVE identifier** resolves the same way, from every register in
+parallel, so Log4Shell comes back as readily as something published this
+morning.
 
 ```bash
 curl 'localhost:3000/api/feed?q=CVE-2021-44228'
 curl 'localhost:3000/api/cve/CVE-2021-44228'
 ```
 
-Looked-up records are marked `outsideWindow` and labelled in the UI. They are
-cached for six hours, since an old CVE rarely changes. The KEV catalog is
-already held in full, so exploitation status, ransomware use and the federal
-remediation deadline come back for any CVE at no extra request.
+Looked-up records are marked `outsideWindow`: they stay out of the browsable
+listing, which is meant to be *current* disclosures, but they are found by
+search, which is meant to be everything known.
 
-Full-text search across every CVE ever published is deliberately *not*
-supported: that needs an index, which means the database this app avoids.
+## Dependency check
+
+[`/dependencies`](https://cve.zerocrew.in/dependencies), `POST /api/dependencies/check`,
+or `check_dependencies` over MCP.
+
+Free-text search cannot answer "is my dependency vulnerable", and it is worth
+being plain about why: it has no ecosystem (npm `zip` and crates.io `zip` are
+unrelated software), no version awareness (4.17.21 is fine where 4.17.15 is
+not), and no way to ask about ninety packages at once.
+
+So this resolves **coordinates** through [OSV.dev](https://osv.dev) — the
+database the ecosystems themselves publish into — then adds the thing OSV does
+not have and `npm audit` cannot tell you: whether an exploit actually exists.
+
+```bash
+curl -X POST localhost:3000/api/dependencies/check \
+  -H 'Content-Type: application/json' \
+  --data "{\"manifest\": $(jq -Rs . < package-lock.json)}"
+```
+
+Reads `package.json`, `package-lock.json`, `yarn.lock`, `requirements.txt`,
+`poetry.lock`, `Pipfile.lock`, `go.mod`, `Cargo.lock`, `Gemfile.lock` and
+`composer.lock`. A lockfile is much better than a manifest — a manifest states
+ranges, which have to be coerced to their floor, and findings from one are
+flagged approximate.
+
+The answer leads with `patchFirst`: what to upgrade, to what version, and why.
+Both halves are cached in MongoDB, so re-checking the same lockfile in CI is
+nearly free.
 
 ## Storage
 
-The app runs two ways, and the difference is where the data sits.
+**MongoDB is the architecture, not an add-on.** It is what makes the corpus
+accumulate instead of ageing out of a rolling window, what lets a CVE fetched
+once stay fetched, and what keeps a cheap shared host from holding the data at
+all. The app still runs without it, degraded and honest about it.
+
+The live instance runs on **MongoDB Atlas M0** — the free tier — which is the
+point: none of this needs a cluster you pay for.
 
 **Without `MONGODB_URI`** everything is in the process: the feed is an array,
 the exploit index is an object, and requests filter and count by scanning them.
@@ -108,14 +227,27 @@ That at-rest 50 MB assumes this. With in-process refreshing it is roughly 120 MB
 
 ### What goes where
 
-| Collection | Holds | Written by |
-| --- | --- | --- |
-| `cves` | One document per merged record, with `firstSeen` and `lastSeen` | each refresh |
-| `exploit_signals` | One per CVE that has any, with links, expiring after 60 days | the exploit refresh |
+| Collection | Holds | Written by | Expires |
+| --- | --- | --- | --- |
+| `cves` | One merged record per vulnerability, with `firstSeen`, `lastSeen` and the names it can be found by | each refresh and each lookup | never |
+| `exploit_signals` | One per CVE that has any, with links | the exploit refresh | 60 days |
+| `pocs` | Community submissions, held for review before publication | visitors | 60 days |
+| `osv_queries` | What OSV said about one package coordinate | dependency sweeps | 6 hours |
+| `osv_vulns` | One OSV advisory, trimmed to what a sweep reports | dependency sweeps | 14 days |
 
-Free-text search uses a MongoDB text index, which matches words rather than
-substrings — a deliberate difference from the in-memory scan, which could not
-survive a growing collection.
+Everything that can grow without bound has a TTL index, so Atlas expires it
+rather than the free tier filling up.
+
+Indexes are created on first use and **fail loudly**: each one is created
+individually, a failure is logged and surfaced in `/healthz`, and the text
+index is checked against the spec in the source and reported if it has drifted
+— never silently recreated, because dropping it would make every `$text` query
+error until it was rebuilt.
+
+`/healthz` and `feed_status` both report how much of the corpus is searchable
+by name. That number climbs as records are re-ingested rather than being
+complete on day one, and saying so is the difference between "not vulnerable"
+and "not enriched yet".
 
 ## Community proofs of concept
 
@@ -269,14 +401,20 @@ can query the feed as a tool instead of scraping the page. No key, no account.
 
 | Tool | Does |
 | --- | --- |
-| `search_cves` | Filter by text, severity, CVSS, exploitation, AI-stack category or recency |
-| `get_cve` | One vulnerability by CVE, GHSA, EUVD or advisory ID, with the direct-source fallback |
-| `list_exploited` | What CISA has confirmed is being exploited, optionally scoped to the AI stack |
-| `feed_status` | Source health, data age and the available categories |
+| `check_dependencies` | **Paste a lockfile.** Resolves every package at its exact version and orders the findings by whether exploit code exists |
+| `search_cves` | Filter by package or vendor name, free text, severity, CVSS, EPSS, exploitation, exploit maturity, AI-stack category or recency. Paginated |
+| `get_cve` | One vulnerability in full by CVE, GHSA, EUVD or advisory ID, with community PoCs. Anything unseen is fetched live and kept |
+| `get_exploits` | The exploit picture for one CVE on its own: maturity, evidence, and links to the Metasploit module, Exploit-DB entry, Nuclei template and PoC repos by stars |
+| `list_exploited` | What CISA confirms is being exploited right now, optionally scoped to the AI stack |
+| `feed_status` | What is stored, which registers answered, whether the database or the degraded fallback is serving, and how much of the corpus is searchable by name |
 
 ```bash
-claude mcp add --transport http cvefeed https://yourdomain.com/mcp
+claude mcp add --transport http cvefeed https://cve.zerocrew.in/mcp
 ```
+
+Ask it things like *"are any of our dependencies exploitable?"*, *"what landed
+overnight that changes my plan?"* or *"can CVE-2021-44228 actually be
+exploited, and with what?"*
 
 Two decisions worth knowing about.
 
@@ -295,6 +433,9 @@ The protocol is implemented directly rather than through the official SDK, which
 pulls seventeen transitive dependencies including a second major version of
 Express. `npm run test:mcp` checks conformance against the real SDK client, as a
 dev dependency that never ships.
+
+**Exploit material is for authorised testing only.** Point this at systems you
+own or have written permission to test.
 
 `GET /llms.txt` describes all of this in prose, for agents handed only a domain.
 
@@ -443,10 +584,27 @@ are parsed or merged.
   **Unscored** until NVD finishes analysis — that is expected, not an error.
 - Always confirm against the upstream advisory before acting on a record.
 
-## License
+## Licence
 
-GNU General Public License v3.0 or later - see [LICENSE](LICENSE).
+**[PolyForm Noncommercial 1.0.0](LICENSE)** — source-available, not open
+source.
 
-That covers this code. The vulnerability data it fetches stays under its own
-sources' terms: NVD and CISA KEV are US government works in the public domain,
-GitHub Advisories are CC-BY-4.0, and EUVD is published under ENISA's terms.
+You may read it, run it, self-host it, study it, modify it and share it, for
+any **noncommercial** purpose. Personal use, research, study, hobby projects,
+charities, schools, universities, public research and safety bodies, and
+government all qualify. What you may not do is sell it, offer it as a paid
+service, or use it to run a business.
+
+Want to use it commercially? Open an issue and ask.
+
+Earlier releases were published under GPL-3.0-or-later. That grant cannot be
+withdrawn — anyone who received those versions keeps their rights to them.
+This licence governs this version onward.
+
+### The data is not ours to licence
+
+The vulnerability data this fetches stays under its own sources' terms: NVD and
+CISA KEV are US government works in the public domain, GitHub Advisories are
+CC-BY-4.0, EUVD is published under ENISA's terms, and OSV records carry the
+licences of the databases they come from. Community proofs of concept are
+published under the licence each author chose at submission.

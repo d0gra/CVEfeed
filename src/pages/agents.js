@@ -200,7 +200,7 @@ curl '${escapeHtml(origin)}/api/cve/CVE-2021-44228'</code></pre>
       accumulate instead of ageing out, and lets a CVE fetched once stay fetched. If the database
       is ever unreachable the server falls back to serving from memory rather than going down.</p>
       <p class="aside"><a href="https://github.com/d0gra/CVEfeed" rel="noopener">Source on GitHub</a>
-      — GPL-3.0, self-hostable, no telemetry.</p>
+      — source-available for noncommercial use, self-hostable, no telemetry.</p>
     </section>
   </article>`;
 
