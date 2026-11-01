@@ -16,6 +16,11 @@ import config from '../config.js';
 let clientPromise = null;
 let lastError = null;
 let connected = false;
+// Whether a connection has ever been attempted in this process. Without it,
+// "we have not needed the database yet" and "the database refused us" both
+// report as connected:false with no error, which is the least useful thing a
+// health endpoint can say during an outage.
+let attempted = false;
 // After a failed connection we stop trying for a cooldown. This is what keeps
 // an unreachable Atlas from being a slow, resource-leaking disaster: without
 // it, every request and every refresh builds a fresh MongoClient, each of
@@ -38,6 +43,7 @@ export async function getDb() {
   // without constructing a client or waiting on a timeout.
   if (!clientPromise && Date.now() < retryAfter) return null;
 
+  attempted = true;
   clientPromise ??= (async () => {
     const client = new MongoClient(config.mongoUri, {
       // The driver defaults to 100 sockets, which is a lot of memory to hold
@@ -81,12 +87,25 @@ export async function getDb() {
   return client ? client.db(config.mongoDb) : null;
 }
 
-/** Health, for /healthz and the dashboard's source line. */
-export const mongoStatus = () => ({
-  configured: mongoConfigured(),
-  connected,
-  error: lastError,
-});
+/**
+ * Health, for /healthz and the dashboard's source line.
+ *
+ * `state` is the field to read. connected:false on its own is ambiguous - it
+ * covers a database that refused us and one we simply have not asked yet,
+ * which look identical and want opposite responses.
+ */
+export const mongoStatus = () => {
+  const cooldownMs = Math.max(0, retryAfter - Date.now());
+  const state = !mongoConfigured() ? 'not-configured' : connected ? 'connected' : attempted ? 'failed' : 'idle';
+  return {
+    configured: mongoConfigured(),
+    connected,
+    state,
+    error: lastError,
+    ...(state === 'idle' ? { note: 'No connection attempted yet; nothing has needed the database.' } : {}),
+    ...(cooldownMs > 0 ? { retryInSeconds: Math.ceil(cooldownMs / 1000) } : {}),
+  };
+};
 
 export async function closeMongo() {
   if (!clientPromise) return;
