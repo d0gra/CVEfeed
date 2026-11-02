@@ -225,7 +225,7 @@ export async function cached(
 export function peek(key) {
   const entry = memory.get(key);
   if (!entry) return null;
-  return { storedAt: entry.storedAt, ageMs: Date.now() - entry.storedAt };
+  return { storedAt: entry.storedAt, ageMs: Date.now() - entry.storedAt, value: entry.value };
 }
 
 export function clearCache() {

@@ -14,8 +14,16 @@ import { getDb } from '../lib/mongo.js';
 import { SEVERITY_ORDER } from '../lib/severity.js';
 import { STACK_CATEGORY_IDS } from '../stack.js';
 import { normalizeTerm } from '../lib/terms.js';
+import { cached } from '../lib/cache.js';
+import config from '../config.js';
 
 const COLLECTION = 'cves';
+// Scoped to the database. The cache is written to disk and outlives the
+// process, so a key naming only the data would be shared by every database
+// this code is ever pointed at - which is how a test against a throwaway
+// database came back holding the production vocabulary.
+const hubNamesKey = () => `hub-names-${config.mongoDb}`;
+const HUB_NAMES_TTL_MS = 60 * 60 * 1000;
 
 let indexesReady = null;
 
@@ -133,7 +141,13 @@ export async function upsertRecords(items) {
 
   for (let i = 0; i < items.length; i += CHUNK) {
     const ops = items.slice(i, i + CHUNK).map((item) => {
-      const { key, ...rest } = item;
+      // The store's own bookkeeping is stripped before writing. A record that
+      // has been read back out of this collection carries firstSeen and
+      // lastSeen, and putting firstSeen in $set alongside $setOnInsert is a
+      // path conflict the server rejects - for the whole batch, not just the
+      // one record. Nothing writes a round-tripped record today; this keeps it
+      // that way by construction rather than by luck.
+      const { key, _id, firstSeen, lastSeen, ...rest } = item;
       return {
         updateOne: {
           filter: { _id: key },
@@ -358,6 +372,22 @@ const SORTS = {
   exploitability: { 'exploitation.maturityRank': 1, epss: -1 },
 };
 
+/**
+ * The fields a server-rendered list row actually shows.
+ *
+ * The exploited and AI-stack pages fetched two hundred whole documents each
+ * to render seven fields per row. Descriptions and reference lists are half
+ * of every document, and on a shared free cluster those bytes are throttled
+ * network: the projection is the difference between a page that holds a
+ * worker for 0.6 seconds and one that does not. The dashboard and the API
+ * still get whole records, because their rows expand in place.
+ */
+const ROW_PROJECTION = {
+  cveId: 1, ghsaId: 1, advisoryId: 1, id: 1, title: 1, severity: 1, score: 1,
+  published: 1, exploited: 1, stack: 1, 'exploitation.maturity': 1,
+  'exploitation.weaponized': 1, 'exploitation.publicExploit': 1, 'exploitation.publicPoc': 1,
+};
+
 /** One page of records, plus how many matched. */
 export async function queryRecords(query = {}) {
   const col = await collection();
@@ -370,7 +400,7 @@ export async function queryRecords(query = {}) {
   const run = async (filter) => {
     const [rows, total] = await Promise.all([
       col
-        .find(filter)
+        .find(filter, query.fields === 'row' ? { projection: ROW_PROJECTION } : {})
         .sort(SORTS[sortKey])
         .skip((page - 1) * limit)
         .limit(limit)
@@ -600,6 +630,21 @@ export async function aggregateSuggestionVocabulary({ limit = 2000 } = {}) {
 }
 
 /**
+ * The hub vocabulary, cached.
+ *
+ * This is a $facet over the whole collection - 56ms warm, well over a second
+ * cold - and it is wanted on every hub page, every hub index and the sitemap.
+ * Uncached that is a full aggregation per crawler hit, and a crawler now has
+ * a few hundred hub URLs to walk, each one holding a worker for the duration.
+ * The names change only when records are ingested, so an hour is ample.
+ */
+export function hubNames(options) {
+  return cached(hubNamesKey(), () => aggregateHubNames(options), { ttlMs: HUB_NAMES_TTL_MS }).then(
+    (entry) => entry.value,
+  );
+}
+
+/**
  * Records naming one vendor, product or package.
  *
  * A hub page per name is the bulk of this site's indexable surface: "microsoft
@@ -613,13 +658,37 @@ export async function recordsForName(kind, value, { limit = 60 } = {}) {
   const field = { vendor: 'vendors', product: 'products', package: 'packages.name' }[kind];
   if (!field) return null;
 
-  // Case-insensitive, because a hub's URL is a slug and the stored name keeps
-  // its own capitalisation.
+  // Two clauses doing different jobs. `searchTerms` is the indexed, already
+  // lowercased list of every name a record carries, so it is what actually
+  // selects the candidates - a case-insensitive anchored regex cannot use an
+  // index and would scan the collection on every hub view. The regex then
+  // confirms the name is of the right *kind*, since `searchTerms` cannot tell
+  // the npm package `zip` from a vendor of the same name.
+  //
+  // Requiring searchTerms also excludes records from before names were kept,
+  // which is correct rather than unfortunate: those have no `vendors` array
+  // either, so they could never have matched.
+  const lowered = String(value).trim().toLowerCase();
   const pattern = new RegExp(`^${escapeRegex(String(value))}$`, 'i');
-  const filter = { [field]: pattern };
+  const filter = { searchTerms: lowered, [field]: pattern };
 
+  // Projected, because a hub row shows seven fields and these documents are
+  // large - descriptions, reference lists, per-source payloads. Pulling sixty
+  // of them whole was most of the time a big vendor's page took, and the
+  // bytes come off a shared cluster over the network.
   const [rows, total] = await Promise.all([
-    col.find(filter).sort(SORTS.priority).limit(limit).toArray(),
+    col
+      .find(filter, {
+        projection: {
+          cveId: 1, ghsaId: 1, advisoryId: 1, title: 1, severity: 1, score: 1,
+          published: 1, exploited: 1, 'exploitation.maturity': 1,
+          'exploitation.weaponized': 1, 'exploitation.publicExploit': 1,
+          'exploitation.publicPoc': 1, vendors: 1, products: 1, packages: 1,
+        },
+      })
+      .sort(SORTS.priority)
+      .limit(limit)
+      .toArray(),
     col.countDocuments(filter),
   ]);
 
@@ -633,7 +702,7 @@ export async function recordsForName(kind, value, { limit = 60 } = {}) {
  * per one-off would be exactly the thin, mass-produced surface that gets a
  * domain demoted rather than ranked.
  */
-export async function hubNames({ min = 2, limit = 400 } = {}) {
+async function aggregateHubNames({ min = 2, limit = 400 } = {}) {
   const col = await collection();
   if (!col) return null;
 
@@ -648,9 +717,14 @@ export async function hubNames({ min = 2, limit = 400 } = {}) {
     { $limit: limit },
   ];
 
+  // Deliberately not filtered by outsideWindow, so this agrees with
+  // recordsForName below. A hub is a search, not the browsable listing: it
+  // should show everything known about a name, including records that only
+  // exist because somebody looked them up. Counting them here and listing
+  // them there - or the reverse - would make the index and the page disagree
+  // about the same name.
   const [result] = await col
     .aggregate([
-      { $match: { outsideWindow: { $ne: true } } },
       {
         $facet: {
           vendors: branch('vendors'),

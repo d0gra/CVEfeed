@@ -5,6 +5,8 @@ import { enabledSources } from './sources/index.js';
 import { attachSignals } from './exploits.js';
 import { mongoConfigured } from './lib/mongo.js';
 import { upsertRecords } from './store/cveStore.js';
+import { getMeta, putMeta } from './store/metaStore.js';
+import { readOnly } from './lib/refreshPolicy.js';
 
 const FEED_KEY = 'feed-merged';
 
@@ -98,7 +100,12 @@ async function collect() {
     // outage - keep the records in memory and serve from there. A database
     // problem must cost memory, never uptime; the app stays up, just heavier.
     if (written.ok) {
-      return { ...meta, items: null, stored: true, fetched: items.length, written: written.written };
+      const summary = { ...meta, items: null, stored: true, fetched: items.length, written: written.written };
+      // What every read-only web worker serves its metadata from. Written
+      // after the records, so a worker never sees a summary describing
+      // records that have not landed yet.
+      await putMeta('feed', summary);
+      return summary;
     }
     console.warn('[cvefeed] MongoDB is configured but unreachable; serving from memory');
   }
@@ -126,7 +133,64 @@ export const comparators = {
   exploitability: (a, b) => maturityOf(a) - maturityOf(b) || (b.epss ?? -1) - (a.epss ?? -1),
 };
 
+/**
+ * Whether this process may build the feed itself.
+ *
+ * With a database, the answer is no unless WEB_REFRESH says otherwise: the
+ * records are already in the store and a worker only needs the summary of the
+ * last refresh, which scripts/refresh.js leaves in `meta`. Without a database
+ * there is nowhere else for the data to come from, so the process builds it
+ * as it always has.
+ */
+export { readOnly };
+
+/**
+ * The last refresh's summary, read from the store.
+ *
+ * Cached briefly per worker so a busy dashboard is not a findOne per request,
+ * and short enough that a new refresh is picked up within a minute. Never
+ * builds anything - if no refresh has ever run, it says so rather than
+ * starting one.
+ */
+const META_TTL_MS = 60_000;
+
+async function readFeedSummary() {
+  let summary = null;
+  try {
+    summary = await getMeta('feed');
+  } catch {
+    /* treated as "no refresh yet" below */
+  }
+  if (summary) return { ...summary, items: null, stored: true };
+
+  // Nothing has refreshed yet - a fresh deploy before cron's first run. The
+  // records already in the store are still served; the empty source list and
+  // missing timestamp make the gap visible instead of hiding it.
+  return {
+    items: null,
+    stored: true,
+    sources: [],
+    exploitSources: [],
+    generatedAt: null,
+    window: { nvdDays: config.nvdDays },
+    neverRefreshed: true,
+  };
+}
+
+/**
+ * Build the feed now. For the refresher - scripts/refresh.js, the refresh
+ * endpoint, or the opt-in interval - never for an ordinary request.
+ */
+export const refreshFeed = () => cached(FEED_KEY, collect, { force: true });
+
 export async function getFeed({ force = false } = {}) {
+  // Workers read. Even `force` reads: forcing a rebuild is a refresher's job,
+  // and the callers that pass it on a request path only want the newest data
+  // there is, which a re-read gives them.
+  if (readOnly()) {
+    return cached(FEED_KEY, readFeedSummary, { force, ttlMs: META_TTL_MS, staleWhileRevalidateMs: META_TTL_MS });
+  }
+
   const feed = await cached(FEED_KEY, collect, { force });
 
   // A snapshot left by a run with MONGODB_URI set holds only metadata, no
@@ -144,4 +208,4 @@ export async function getFeed({ force = false } = {}) {
 
 export const feedCacheStatus = () => peek(FEED_KEY);
 
-export default { getFeed, comparators, feedCacheStatus };
+export default { getFeed, refreshFeed, readOnly, comparators, feedCacheStatus };

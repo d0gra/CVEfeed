@@ -198,7 +198,7 @@ keeps a page of results and nothing else.
 
 | | In memory | On MongoDB |
 | --- | --- | --- |
-| Resident memory, at rest | 82 MB | **50 MB** |
+| Resident memory, at rest | 82 MB | **84 MB** (75 MB warm) |
 | Disk | 11.8 MB | **8 KB** |
 | Data held on the host | 22.9 MB | ~0 |
 | Grows as records accumulate | yes | no |
@@ -211,19 +211,78 @@ data**, and that a database makes the feed stop forgetting: records accumulate
 instead of ageing out of a seven-day window, so a CVE keeps its page after it
 drops out of the fetch.
 
-### Keep refreshes out of the web process
+### Web workers only read; cron refreshes
 
-Fetching and merging peaks far above anything serving costs — around 120 MB for
-the feed and 270 MB while parsing the exploit catalogues. Running that inside
-the web process sizes the process for its worst minute. Set
-`REFRESH_INTERVAL_MINUTES=0` and let cron own it:
+A refresh downloads five registers and parses ~27 MB of exploit catalogues.
+Measured, it peaks at **475 MB** — and V8 does not hand that memory back
+afterwards, so a web worker that refreshes once stays that size for the rest of
+its life.
 
-```bash
-*/20 * * * * cd /path/to/cvefeed && npm run refresh      # the feed
-17 */12 * * * cd /path/to/cvefeed && npm run refresh:all # and exploit signals
+So with a database configured, **web workers never refresh**. They serve
+records straight from Atlas and read a ~3 KB summary of the last refresh from
+the `meta` collection. Refreshing belongs to `scripts/refresh.js`, a
+short-lived process that takes the peak and then exits, returning the memory
+with it.
+
+| | before | read-only worker |
+| --- | --- | --- |
+| Cold boot | 173 MB | **84 MB** |
+| Under sustained load | spikes to 270 MB+ on refresh | plateaus ~130–150 MB |
+| Refresh peak | inside a worker, permanently | in a process that exits |
+
+This means **a cron job is required**. Without one the data stops updating —
+and `/healthz` says so rather than staying quietly green:
+
+```json
+"refresh": { "mode": "external", "stale": true,
+             "problem": "The last refresh is older than expected; check the cron job." }
 ```
 
-That at-rest 50 MB assumes this. With in-process refreshing it is roughly 120 MB.
+`feedAgeSeconds` is measured from when the data was generated, not from when a
+worker last looked — otherwise a dead cron job would read as fresh forever.
+
+Set `WEB_REFRESH=true` to let workers refresh themselves again, for hosts with
+no cron. Expect the memory to follow.
+
+#### Setting up cron on Hostinger
+
+**1. Give cron the environment.** Variables set in the Node.js app panel are
+injected into the web app only — cron never sees them. The refresh script reads
+a `.env` file from the app directory, so create one there (it is gitignored,
+and `chmod 600` it):
+
+```bash
+MONGODB_URI=mongodb+srv://...
+MONGODB_DB=cvefeed
+NVD_API_KEY=...
+GITHUB_TOKEN=...
+```
+
+Without `MONGODB_URI` the refresh runs but writes nowhere the workers can see,
+and `/healthz` flags the feed as stale within the hour.
+
+**2. Find Node.** Over SSH, in the app directory:
+
+```bash
+ls -d /opt/alt/alt-nodejs*/root/usr/bin/node
+```
+
+Use the one matching the version selected in the Node.js app panel.
+
+**3. Add two jobs** in hPanel → Advanced → Cron Jobs, substituting your paths:
+
+```bash
+*/30 * * * * cd /home/USER/domains/cve.zerocrew.in/APP_DIR && /opt/alt/alt-nodejs24/root/usr/bin/node scripts/refresh.js >> refresh.log 2>&1
+17 */12 * * * cd /home/USER/domains/cve.zerocrew.in/APP_DIR && /opt/alt/alt-nodejs24/root/usr/bin/node scripts/refresh.js --exploits >> refresh.log 2>&1
+```
+
+Every 30 minutes for the feed is plenty for a CVE feed and halves the cost of
+every 20. The exploit catalogues change slowly, so twice a day — offset to
+minute 17 so the two never run at once and stack their peaks.
+
+**4. Check it took.** After the first run, `/healthz` should show
+`"refresh": {"mode": "external", "stale": false}` and a small `feedAgeSeconds`.
+`refresh.log` holds each run's per-source results and peak memory.
 
 ### What goes where
 
@@ -508,7 +567,7 @@ All endpoints return JSON.
 `GET /api/feed` accepts `q`, `severity` (`critical,high,medium,low,none`),
 `source`, `kind` (`cve` / `advisory`), `stack`, `exploit`, `maturity`,
 `exploited=1`, `minScore`, `days`, `sort` (`priority`, `newest`, `updated`,
-`score`, `epss`, `severity`, `exploitability`), `page` and `limit` (max 500).
+`score`, `epss`, `severity`, `exploitability`), `page` and `limit` (max 100).
 
 An unrecognised `exploit` value returns nothing rather than everything: in a
 security tool a typo should look wrong, not look like no filter.

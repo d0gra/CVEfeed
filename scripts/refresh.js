@@ -6,14 +6,17 @@
  * request costs. Doing it inside the web process means the web process is
  * sized for its worst minute rather than its normal one.
  *
- * Run from cron instead, and set REFRESH_INTERVAL_MINUTES=0 on the web app so
- * it only ever reads. The peak then belongs to a process that exits.
+ * Run from cron. With a database configured, web workers no longer refresh
+ * at all - they read the summary this leaves in the `meta` collection - so
+ * this script is what keeps the data current. The peak then belongs to a
+ * process that exits, and the memory goes back to the operating system with
+ * it rather than staying resident in a worker for the rest of its life.
  *
  *   node scripts/refresh.js            refresh the feed
  *   node scripts/refresh.js --exploits refresh the exploit signals too
  */
-import { getFeed } from '../src/aggregate.js';
-import { getExploitIndex } from '../src/exploits.js';
+import { refreshFeed } from '../src/aggregate.js';
+import { refreshExploitIndex } from '../src/exploits.js';
 import { closeMongo, mongoConfigured } from '../src/lib/mongo.js';
 
 const started = Date.now();
@@ -21,14 +24,14 @@ const peakMb = () => (process.memoryUsage().rss / 1024 / 1024).toFixed(0);
 
 try {
   if (process.argv.includes('--exploits')) {
-    const index = await getExploitIndex({ force: true });
+    const index = await refreshExploitIndex();
     for (const source of index.value.health ?? []) {
       console.log(`  ${source.ok ? 'ok  ' : 'FAIL'}  ${source.id} (${source.count})${source.error ? `: ${source.error}` : ''}`);
     }
     console.log(`exploit signals refreshed in ${Date.now() - started}ms, peak ${peakMb()}MB`);
   }
 
-  const feed = await getFeed({ force: true });
+  const feed = await refreshFeed();
   const failed = feed.value.sources.filter((s) => !s.ok);
   const count = feed.value.stored ? feed.value.written : feed.value.items.length;
 

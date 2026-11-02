@@ -12,7 +12,8 @@ import { closeMongo, mongoStatus } from './lib/mongo.js';
 import { storeIndexWarnings } from './store/cveStore.js';
 import { missingPage, originFor } from './pages/index.js';
 import { llmsTxt } from './llms.js';
-import { getFeed, feedCacheStatus } from './aggregate.js';
+import { getFeed, feedCacheStatus, readOnly, refreshFeed } from './aggregate.js';
+import { dataAgeMs } from './query.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(here, '..', 'public');
@@ -93,12 +94,41 @@ export function createApp() {
   app.get('/', sendIndex);
 
   app.get('/healthz', (_req, res) => {
+    // Read without side effects: a health check must never start a refresh,
+    // however old the data is. `peek` returns what this worker holds and
+    // nothing else.
     const cache = feedCacheStatus();
+    const ageMs = cache ? dataAgeMs(cache) : null;
+    const external = readOnly();
+    const stale = external && (ageMs == null || ageMs > config.staleAfterMs);
     res.json({
+      // Still "ok" when stale: the app is up and serving. The refresh is a
+      // separate job, and it is reported separately below so a monitor can
+      // alert on it specifically.
       status: 'ok',
       uptimeSeconds: Math.round(process.uptime()),
       feedCached: Boolean(cache),
-      feedAgeSeconds: cache ? Math.round(cache.ageMs / 1000) : null,
+      // How old the DATA is - since the last refresh, not since this worker
+      // last looked. See dataAgeMs for why those differ.
+      feedAgeSeconds: ageMs == null ? null : Math.round(ageMs / 1000),
+      refresh: {
+        mode: external ? 'external' : 'in-process',
+        ...(external
+          ? {
+              staleAfterSeconds: Math.round(config.staleAfterMs / 1000),
+              stale,
+              // The thing to act on. Workers no longer refresh, so data this
+              // old means the cron job has stopped running.
+              ...(stale
+                ? {
+                    problem: cache?.value?.neverRefreshed
+                      ? 'No refresh has ever run. Schedule scripts/refresh.js - see the README.'
+                      : 'The last refresh is older than expected; check the cron job.',
+                  }
+                : {}),
+            }
+          : {}),
+      },
       // The thresholds that give the age above its meaning: under the TTL is
       // fresh, under TTL + grace is served instantly while refreshing behind
       // it, and beyond that the next request waits for upstream.
@@ -210,10 +240,19 @@ export function start() {
     console.log(`[cvefeed] sources: ${config.sources.join(', ')}`);
   });
 
-  // Warm the cache so the first visitor does not wait on upstream feeds.
+  // Warm the cache so the first visitor does not wait. A read-only worker
+  // reads the last refresh's summary; only a builder fetches upstream.
   getFeed().then(
     (feed) => {
       const ok = feed.value.sources.filter((s) => s.ok).length;
+      if (readOnly()) {
+        console.log(
+          feed.value.neverRefreshed
+            ? '[cvefeed] read-only: no refresh has run yet - schedule scripts/refresh.js'
+            : `[cvefeed] read-only: serving the refresh from ${feed.value.generatedAt} (${ok}/${feed.value.sources.length} sources)`,
+        );
+        return;
+      }
       console.log(
         feed.value.stored
           ? `[cvefeed] store ready: ${feed.fromCache ? 'using the existing refresh' : `wrote ${feed.value.written} records`}` +
@@ -224,11 +263,13 @@ export function start() {
     (error) => console.error('[cvefeed] initial fetch failed:', error.message),
   );
 
-  if (config.refreshIntervalMs > 0) {
+  // An in-process refresh timer only makes sense for a worker allowed to
+  // build. A read-only worker skips it entirely - otherwise the default
+  // 20-minute interval would quietly put the refresh back inside every worker,
+  // which is the whole thing read-only mode exists to stop.
+  if (config.refreshIntervalMs > 0 && !readOnly()) {
     const timer = setInterval(() => {
-      getFeed({ force: true }).catch((error) =>
-        console.error('[cvefeed] background refresh failed:', error.message),
-      );
+      refreshFeed().catch((error) => console.error('[cvefeed] background refresh failed:', error.message));
     }, config.refreshIntervalMs);
     timer.unref();
   }

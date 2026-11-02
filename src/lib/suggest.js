@@ -14,11 +14,14 @@
  * over the moment more than one person uses it.
  */
 import { cached } from './cache.js';
+import config from '../config.js';
 import { normalizeTerm } from './terms.js';
 import { subjectSuggestions } from '../stack.js';
 import { aggregateSuggestionVocabulary } from '../store/cveStore.js';
 
-const CACHE_KEY = 'suggest-vocab';
+// Scoped to the database, for the same reason as the hub names: this cache
+// is on disk and would otherwise be shared across every database.
+const cacheKey = () => `suggest-vocab-${config.mongoDb}`;
 const TTL_MS = Math.max(1, Number.parseInt(process.env.SUGGEST_TTL_HOURS || '', 10) || 6) * 3_600_000;
 
 /** `kind` drives what the dashboard may offer: only a package gets a version check. */
@@ -50,7 +53,7 @@ function curatedRows() {
 async function corpusRows() {
   try {
     const entry = await cached(
-      CACHE_KEY,
+      cacheKey(),
       async () => {
         const vocab = await aggregateSuggestionVocabulary();
         // Throw rather than return null when the store is unreachable. The

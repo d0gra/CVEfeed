@@ -6,7 +6,7 @@
  * rather than in either one of them.
  */
 import config from './config.js';
-import { comparators, getFeed } from './aggregate.js';
+import { comparators, getFeed, readOnly } from './aggregate.js';
 import { SEVERITY_ORDER } from './lib/severity.js';
 import { isCveId, isNameQuery, lookupByName, lookupCve } from './lookup.js';
 import { STACK_CATEGORY_IDS } from './stack.js';
@@ -171,18 +171,41 @@ function summarize(items) {
   };
 }
 
-const feedMeta = (feed) => ({
+/**
+ * How old the data is - measured from when it was generated, not from when
+ * this worker last looked.
+ *
+ * The two used to be the same thing, because the worker that served a request
+ * was also the one that built the feed. Once workers only read, the cache
+ * entry's age is just how long ago a worker re-read the summary - under a
+ * minute, always - and reporting that would show the feed as fresh forever
+ * while the cron job that actually refreshes it had been dead for a day.
+ */
+export function dataAgeMs(feed) {
+  const generated = Date.parse(feed?.value?.generatedAt ?? '');
+  return Number.isFinite(generated) ? Date.now() - generated : (feed?.ageMs ?? null);
+}
+
+const feedMeta = (feed) => {
+  const ageMs = dataAgeMs(feed);
+  const external = readOnly();
+  return {
   generatedAt: feed.value.generatedAt,
   fromCache: feed.fromCache,
-  stale: feed.stale,
+  // Read-only workers judge staleness against the refresh schedule, since the
+  // cache entry is always young; builders keep the cache's own judgement.
+  stale: external ? ageMs == null || ageMs > config.staleAfterMs : feed.stale,
   // stale + revalidating means the snapshot is old but a refresh is already
   // running; stale on its own means the refresh failed.
-  revalidating: feed.revalidating ?? false,
-  ageSeconds: Math.round((feed.ageMs ?? 0) / 1000),
+  revalidating: external ? false : (feed.revalidating ?? false),
+  refresh: external ? 'external' : 'in-process',
+  ...(feed.value.neverRefreshed ? { neverRefreshed: true } : {}),
+  ageSeconds: ageMs == null ? null : Math.round(ageMs / 1000),
   cacheTtlSeconds: Math.round(config.cacheTtlMs / 1000),
   staleWhileRevalidateSeconds: Math.round(config.staleWhileRevalidateMs / 1000),
   ...(feed.error ? { warning: feed.error } : {}),
-});
+  };
+};
 
 /**
  * Filter, sort and page the feed, falling back to a direct source lookup when
@@ -319,11 +342,18 @@ const pocRepos = (item) => (item?.exploitation?.publicPoc ? pocLinksFor(item.cve
  * four sources. A no-op without a reachable database.
  */
 async function persistLookup(item) {
-  if (!mongoConfigured() || !item) return;
+  if (item) await persistLookups([item]);
+}
+
+async function persistLookups(items) {
+  if (!mongoConfigured() || !items?.length) return;
   try {
-    await upsertRecords([item]);
-  } catch {
-    // Caching the lookup is best-effort; failing it must not fail the request.
+    await upsertRecords(items);
+  } catch (error) {
+    // Caching the lookup is best-effort; failing it must not fail the
+    // request. Logged, because a write that silently never lands means every
+    // search for that name pays for the upstream lookup again.
+    console.warn(`[cvefeed] could not keep ${items.length} looked-up record(s): ${error.message}`);
   }
 }
 
@@ -362,8 +392,11 @@ async function nameFallback(query) {
     if (!items.length) return null;
 
     await attachSignals(items);
-    // Kept so the second search for this name is served from the store.
-    for (const item of items) await persistLookup(item);
+    // Kept so the second search for this name is served from the store - in
+    // one batch. This used to be one awaited round trip per record, and a
+    // name lookup returns up to forty: measured against the cluster that was
+    // 1.9 seconds of a worker sitting idle, against 0.1 for the batch.
+    await persistLookups(items);
 
     return {
       items,

@@ -91,6 +91,7 @@ for (const [kind, path] of Object.entries(HUB_PATHS)) {
           ? found.items[0].packages?.find((p) => p.name.toLowerCase() === name.toLowerCase())?.name ?? name
           : found.items[0][field]?.find((v) => v.toLowerCase() === name.toLowerCase()) ?? name;
 
+      // Cached now, so this is a map lookup rather than a second aggregation.
       const all = await hubNames();
       const related = (all?.[`${kind}s`] ?? [])
         .filter((n) => n.value.toLowerCase() !== name.toLowerCase())
@@ -191,7 +192,7 @@ router.get('/ai-stack/:category', async (req, res, next) => {
 
   try {
     const origin = originFor(req);
-    const { items } = await queryFeed({ stack: category.id, limit: 200, sort: 'newest' });
+    const { items } = await queryFeed({ stack: category.id, limit: 200, sort: 'newest', fields: 'row' });
     html(
       res,
       stackCategoryPage({
@@ -210,7 +211,7 @@ router.get('/ai-stack/:category', async (req, res, next) => {
 router.get('/exploited', async (req, res, next) => {
   try {
     const origin = originFor(req);
-    const { items } = await queryFeed({ exploited: '1', limit: 200, sort: 'priority' });
+    const { items } = await queryFeed({ exploited: '1', limit: 200, sort: 'priority', fields: 'row' });
     html(
       res,
       exploitedPage({

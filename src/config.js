@@ -26,6 +26,17 @@ export const config = {
   // blocking on every expiry.
   staleWhileRevalidateMs: clamp(int(process.env.STALE_WHILE_REVALIDATE_MINUTES, 360), 0, 10080) * 60_000,
   refreshIntervalMs: clamp(int(process.env.REFRESH_INTERVAL_MINUTES, 20), 0, 1440) * 60_000,
+  // Whether web workers may refresh the data themselves. Off by default when a
+  // database is configured: a refresh peaks at 170-270MB and V8 keeps that
+  // heap afterwards, so a worker that refreshes once stays that size. With
+  // this off, workers only read, and scripts/refresh.js - run from cron - owns
+  // every refresh. Turn it on only where no cron is available, and expect the
+  // memory to follow.
+  webRefresh: bool(process.env.WEB_REFRESH, false),
+  // When the last external refresh is older than this, /healthz says so. The
+  // point is that a cron job which has quietly stopped is visible, rather
+  // than the feed simply getting older while everything reports healthy.
+  staleAfterMs: clamp(int(process.env.STALE_AFTER_MINUTES, 60), 5, 10080) * 60_000,
   nvdDays: clamp(int(process.env.NVD_DAYS, 7), 1, 120),
   nvdMaxPages: clamp(int(process.env.NVD_MAX_PAGES, 2), 1, 10),
   nvdApiKey: process.env.NVD_API_KEY || '',

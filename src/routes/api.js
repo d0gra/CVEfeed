@@ -1,6 +1,6 @@
 import { Router, json } from 'express';
 import config from '../config.js';
-import { getFeed } from '../aggregate.js';
+import { getFeed, refreshFeed } from '../aggregate.js';
 import { feedMeta, findRecord, queryFeed, summarize } from '../query.js';
 import { enabledSources } from '../sources/index.js';
 import { stackFacets } from '../stack.js';
@@ -35,9 +35,25 @@ const publicPoc = (p) => ({
   submittedAt: p.submittedAt,
 });
 
+/**
+ * The largest page an outside caller may ask for.
+ *
+ * The store allows 500, which the server-rendered pages rely on. From outside
+ * it was a resource hazard: one request for 500 whole records is ~700KB pulled
+ * off a throttled free-tier cluster, and measured at 3.5 seconds of a worker
+ * held for it. The rate limit allows 120 a minute per address, so a single
+ * script paging through at the maximum could keep several workers busy on its
+ * own. 100 still pages the whole corpus in a handful of calls.
+ */
+const API_MAX_LIMIT = 100;
+
 router.get('/feed', async (req, res, next) => {
   try {
-    res.json(await queryFeed(req.query));
+    const limit = Math.min(Math.max(Number.parseInt(req.query.limit ?? '', 10) || 50, 1), API_MAX_LIMIT);
+    // `fields` is how internal pages ask for a trimmed record; from outside it
+    // is ignored, so the API's shape is not something a query string can change.
+    const { fields, ...query } = req.query;
+    res.json(await queryFeed({ ...query, limit }));
   } catch (error) {
     next(error);
   }
@@ -254,7 +270,11 @@ router.post('/refresh', async (req, res, next) => {
   }
 
   try {
-    const feed = await getFeed({ force: true });
+    // A deliberate, token-gated rebuild, so it does build even on a read-only
+    // worker - but in the worker that serves it, which keeps the memory the
+    // refresh used. Cron running scripts/refresh.js is the way to refresh
+    // without that cost; this is for the occasional hand-triggered run.
+    const feed = await refreshFeed();
     res.json({ refreshed: true, meta: feedMeta(feed), sources: feed.value.sources });
   } catch (error) {
     next(error);

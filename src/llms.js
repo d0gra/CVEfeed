@@ -64,7 +64,7 @@ All endpoints return JSON and need no key.
 - \`GET /api/feed\` - the merged feed. Query: \`q\`, \`severity\`
   (${SEVERITY_ORDER.join(', ')}), \`source\`, \`kind\` (cve, advisory), \`stack\`,
   \`exploited=1\`, \`minScore\`, \`days\`, \`sort\` (priority, newest, updated,
-  score, epss, severity), \`page\`, \`limit\` (max 500)
+  score, epss, severity), \`page\`, \`limit\` (max 100)
 - \`GET /api/cve/:id\` - one record, with a direct source lookup as fallback
 - \`GET /api/stats\` - summary counts
 - \`GET /api/sources\` - configured sources and their health
