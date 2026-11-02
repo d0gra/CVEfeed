@@ -93,13 +93,21 @@ export function createApp() {
 
   app.get('/', sendIndex);
 
-  app.get('/healthz', (_req, res) => {
-    // Read without side effects: a health check must never start a refresh,
-    // however old the data is. `peek` returns what this worker holds and
-    // nothing else.
+  app.get('/healthz', async (_req, res) => {
+    const external = readOnly();
+    // A health check must never start a refresh, however old the data is.
+    //
+    // A read-only worker cannot start one at all, so it asks for the summary:
+    // a findOne at most once a minute, cached. Peeking instead reported the
+    // age of whatever this worker last happened to load - a worker that had
+    // seen no feed traffic since the last cron run reported the data as stale
+    // when Atlas held a refresh a minute old, which is a false page.
+    //
+    // A worker allowed to build only peeks, since asking could start a
+    // rebuild in the middle of a health check.
+    if (external) await getFeed().catch(() => null);
     const cache = feedCacheStatus();
     const ageMs = cache ? dataAgeMs(cache) : null;
-    const external = readOnly();
     const stale = external && (ageMs == null || ageMs > config.staleAfterMs);
     res.json({
       // Still "ok" when stale: the app is up and serving. The refresh is a

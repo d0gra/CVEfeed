@@ -12,8 +12,9 @@
  * process that exits, and the memory goes back to the operating system with
  * it rather than staying resident in a worker for the rest of its life.
  *
- *   node scripts/refresh.js            refresh the feed
- *   node scripts/refresh.js --exploits refresh the exploit signals too
+ *   node scripts/refresh.js                refresh the feed
+ *   node scripts/refresh.js --exploits     refresh the exploit signals too
+ *   node scripts/refresh.js --require-db   exit early, cheaply, without a database
  */
 import { refreshFeed } from '../src/aggregate.js';
 import { refreshExploitIndex } from '../src/exploits.js';
@@ -21,6 +22,17 @@ import { closeMongo, mongoConfigured } from '../src/lib/mongo.js';
 
 const started = Date.now();
 const peakMb = () => (process.memoryUsage().rss / 1024 / 1024).toFixed(0);
+
+// Refuse to run without a database when asked to. From cron, a refresh with no
+// MONGODB_URI is not a smaller refresh but a wasted one: it fetches every
+// register and peaks at hundreds of megabytes, then writes nowhere the web
+// workers read. That is exactly what happens if the env file cron points at
+// goes missing, since dotenv skips a missing file without complaint. This
+// turns that into a one-line message and an exit.
+if (process.argv.includes('--require-db') && !mongoConfigured()) {
+  console.log('refresh skipped: --require-db, but no MONGODB_URI - check the env file cron points at');
+  process.exit(2);
+}
 
 try {
   if (process.argv.includes('--exploits')) {

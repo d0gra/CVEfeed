@@ -5,6 +5,10 @@ node_modules/
 .env
 .env.*
 !.env.example
+# Any file ending in .env, wherever it is. `.env.*` does not catch a name like
+# cvefeed.env, which is exactly the shape a server-side env file takes when it
+# is drafted locally first.
+*.env
 
 .cache/
 npm-debug.log*

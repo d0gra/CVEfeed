@@ -246,10 +246,28 @@ no cron. Expect the memory to follow.
 
 #### Setting up cron on Hostinger
 
-**1. Give cron the environment.** Variables set in the Node.js app panel are
-injected into the web app only — cron never sees them. The refresh script reads
-a `.env` file from the app directory, so create one there (it is gitignored,
-and `chmod 600` it):
+These paths are read from the live deployment's own Passenger config, not
+guessed. Hostinger's managed Node.js hosting does **not** run the app from
+`public_html` — that holds only an `.htaccess` pointing Passenger elsewhere:
+
+| | |
+| --- | --- |
+| App directory | `/home/<user>/domains/<domain>/hbuilds/current/nodejs` |
+| Node binary | `/opt/alt/alt-nodejs24/root/bin/node` |
+
+`hbuilds/current` is replaced on every Git deploy, which shapes the setup.
+
+**1. Give cron the environment — outside the app directory.** Variables set in
+the Node.js app panel reach the web app only; cron never sees them. And a
+`.env` put in the app directory is deleted by the next deploy. So create the
+file in your home directory, where deploys never touch it, and `chmod 600` it:
+
+```
+/home/<user>/domains/<domain>/.cvefeed.env
+```
+
+Beside the site rather than inside it: one level above `public_html`, so it
+can never be served, and outside `hbuilds/current`, so no deploy touches it.
 
 ```bash
 MONGODB_URI=mongodb+srv://...
@@ -258,31 +276,58 @@ NVD_API_KEY=...
 GITHUB_TOKEN=...
 ```
 
-Without `MONGODB_URI` the refresh runs but writes nowhere the workers can see,
-and `/healthz` flags the feed as stale within the hour.
+Those four are all the refresh needs. Create it with hPanel's File Manager.
 
-**2. Find Node.** Over SSH, in the app directory:
-
-```bash
-ls -d /opt/alt/alt-nodejs*/root/usr/bin/node
-```
-
-Use the one matching the version selected in the Node.js app panel.
-
-**3. Add two jobs** in hPanel → Advanced → Cron Jobs, substituting your paths:
+**2. Add two cron jobs**, each a single command:
 
 ```bash
-*/30 * * * * cd /home/USER/domains/cve.zerocrew.in/APP_DIR && /opt/alt/alt-nodejs24/root/usr/bin/node scripts/refresh.js >> refresh.log 2>&1
-17 */12 * * * cd /home/USER/domains/cve.zerocrew.in/APP_DIR && /opt/alt/alt-nodejs24/root/usr/bin/node scripts/refresh.js --exploits >> refresh.log 2>&1
+*/30 * * * *  env DISK_CACHE=false DOTENV_CONFIG_PATH=/home/<user>/domains/<domain>/.cvefeed.env /opt/alt/alt-nodejs24/root/bin/node /home/<user>/domains/<domain>/hbuilds/current/nodejs/scripts/refresh.js --require-db
+17 */12 * * * env DISK_CACHE=false DOTENV_CONFIG_PATH=/home/<user>/domains/<domain>/.cvefeed.env /opt/alt/alt-nodejs24/root/bin/node /home/<user>/domains/<domain>/hbuilds/current/nodejs/scripts/refresh.js --require-db --exploits
 ```
 
-Every 30 minutes for the feed is plenty for a CVE feed and halves the cost of
-every 20. The exploit catalogues change slowly, so twice a day — offset to
-minute 17 so the two never run at once and stack their peaks.
+That form is what works, and the reasons are not obvious — each was found by a
+job that failed on the live account:
 
-**4. Check it took.** After the first run, `/healthz` should show
-`"refresh": {"mode": "external", "stale": false}` and a small `feedAgeSeconds`.
-`refresh.log` holds each run's per-source results and peak memory.
+- **Hostinger runs the command under `timeout`, not a shell.** A leading
+  `VAR=value` is taken as the name of a program — the job's output reads
+  `timeout: failed to run command 'DISK_CACHE=false'`. `env` is a real program
+  that sets the variables and then runs Node, so it works.
+- **No shell syntax.** `;`-separated parts do not share variables: a job that
+  set `D=...` and then used `$D` reported the path as `/.cvefeed.env`. Pipes and
+  redirects are rejected outright.
+- **255 characters at most, counted after escaping.**
+
+What each piece is for:
+
+- `DISK_CACHE=false` — the refresher writes to Atlas and has no use for a disk
+  cache, which would otherwise land in whatever directory cron starts in.
+- `DOTENV_CONFIG_PATH` — where the credentials are, since cron cannot see the
+  panel's environment.
+- `--require-db` — exit at once if no `MONGODB_URI` arrived. dotenv skips a
+  missing file silently, so without this a deleted or moved env file means a
+  full refresh every half hour — ~430 MB each — writing nowhere the site
+  reads. With it, the run exits at ~70 MB and says why.
+
+Hostinger captures each run's output, stdout and stderr both, viewable per job
+in hPanel, so there is no log file growing on the account's disk. A healthy
+run ends like this:
+
+```
+  ok    nvd (1000)
+  ok    kev (1766)
+  ok    github (300)
+  ok    euvd (204)
+  ok    cisa (30)
+wrote 1593 records in 18857ms, peak 430MB
+```
+
+Every 30 minutes is plenty for a CVE feed. The exploit catalogues change
+slowly, so twice a day, at minute 17 so the two runs never overlap and stack
+their peaks — the exploit run alone reaches ~475 MB.
+
+**3. Check it took.** After the next run, `/healthz` should show
+`"refresh": {"mode": "external", "stale": false}` and a `feedAgeSeconds`
+under half an hour.
 
 ### What goes where
 

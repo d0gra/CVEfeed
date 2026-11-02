@@ -188,7 +188,12 @@ export async function getFeed({ force = false } = {}) {
   // and the callers that pass it on a request path only want the newest data
   // there is, which a re-read gives them.
   if (readOnly()) {
-    return cached(FEED_KEY, readFeedSummary, { force, ttlMs: META_TTL_MS, staleWhileRevalidateMs: META_TTL_MS });
+    // No stale-while-revalidate. Serving the old summary while re-reading in
+    // the background is right for an expensive rebuild and wrong for a 3KB
+    // findOne: it meant the first request after expiry - often /healthz on a
+    // quiet worker - got the previous refresh's age, so a fresh cron run read
+    // as stale. Waiting the few milliseconds is the cheaper mistake to make.
+    return cached(FEED_KEY, readFeedSummary, { force, ttlMs: META_TTL_MS, staleWhileRevalidateMs: 0 });
   }
 
   const feed = await cached(FEED_KEY, collect, { force });
