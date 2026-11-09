@@ -9,6 +9,7 @@ import { Router } from 'express';
 import config from '../config.js';
 import { getFeed } from '../aggregate.js';
 import { findRecord, queryFeed } from '../query.js';
+import { isBot } from '../lib/bots.js';
 import { isCveId } from '../lookup.js';
 import { STACK_CATEGORIES } from '../stack.js';
 import { hubNames, listIdsForSitemap, recordsForName } from '../store/cveStore.js';
@@ -126,7 +127,9 @@ router.get('/cve/:id', async (req, res, next) => {
   if (raw !== id) return res.redirect(301, `/cve/${encodeURIComponent(id)}`);
 
   try {
-    const found = await findRecord(id);
+    // A crawler gets what the store holds; it does not get an upstream
+    // lookup. See findRecord and src/lib/bots.js.
+    const found = await findRecord(id, { allowUpstream: !isBot(req.get('user-agent')) });
     if (!found.item) {
       return html(res, notFoundPage({ id, origin, canonical, assetVersion }), 404);
     }

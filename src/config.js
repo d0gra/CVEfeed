@@ -113,9 +113,16 @@ export const config = {
   siteUrl: (process.env.SITE_URL || '').replace(/\/+$/, ''),
   refreshToken: process.env.REFRESH_TOKEN || '',
   requestTimeoutMs: clamp(int(process.env.REQUEST_TIMEOUT_SECONDS, 25), 5, 120) * 1000,
+  // Registers ask that a client identify itself and say where to complain.
+  // The old default pointed at https://github.com/ - a placeholder that gave
+  // a reviewer looking at the traffic nothing to go on. SITE_URL is the
+  // deployment's own address, which is the honest answer; without it the
+  // string says so rather than inventing a contact.
   userAgent:
     process.env.USER_AGENT ||
-    'CVEfeed-Dashboard/1.0 (+https://github.com/; aggregates public vulnerability feeds)',
+    `CVEfeed/1.0 (${
+      (process.env.SITE_URL || '').replace(/\/+$/, '') || 'unconfigured deployment, set SITE_URL'
+    }; aggregates public vulnerability feeds)`,
 };
 
 export default config;

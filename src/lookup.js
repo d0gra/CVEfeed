@@ -2,6 +2,7 @@ import { cached, clearCacheKey } from './lib/cache.js';
 import { finalize, mergeAll } from './merge.js';
 import { enabledSources } from './sources/index.js';
 import { lookupBucket } from './lib/ratelimit.js';
+import { mayCall, record as recordCall } from './lib/breaker.js';
 
 /**
  * Single-CVE lookup against the sources directly.
@@ -18,6 +19,22 @@ export const isCveId = (value) => CVE_ID.test(String(value ?? '').trim());
 /** Lookups are cached for longer than the feed: an old CVE rarely changes. */
 const LOOKUP_TTL_MS = 6 * 60 * 60 * 1000;
 
+/**
+ * Sources worth asking for one record right now.
+ *
+ * Two reasons to leave one out: it needs a credential this process does not
+ * have and its anonymous budget belongs to the refresh (see the GitHub source
+ * for why), or it has been refusing and its breaker is still open.
+ */
+function lookupSources(method) {
+  return enabledSources().filter((source) => {
+    if (typeof source[method] !== 'function') return false;
+    const { authEnv, lookupNeedsAuth, id } = source.meta;
+    if (lookupNeedsAuth && authEnv && !process.env[authEnv]) return false;
+    return mayCall(id);
+  });
+}
+
 async function collectOne(cveId) {
   // A burst of distinct CVE ids would otherwise fan out one upstream request
   // each - including one against GitHub's thin anonymous budget, shared across
@@ -27,13 +44,18 @@ async function collectOne(cveId) {
     return { item: null, sources: [], lookedUpAt: new Date().toISOString(), throttled: true };
   }
 
-  const sources = enabledSources().filter((source) => typeof source.lookupById === 'function');
+  const sources = lookupSources('lookupById');
 
   const results = await Promise.all(
     sources.map(async (source) => {
       try {
-        return { meta: source.meta, items: await source.lookupById(cveId), error: null };
+        const items = await source.lookupById(cveId);
+        recordCall(source.meta.id, true);
+        return { meta: source.meta, items, error: null };
       } catch (error) {
+        // A 404 is an answer, not a failure: most CVEs have no advisory at
+        // most registers, and counting those would open every breaker.
+        recordCall(source.meta.id, error.status === 404);
         return { meta: source.meta, items: [], error: error.message };
       }
     }),
@@ -98,13 +120,16 @@ async function collectByName(term) {
     return { items: [], sources: [], lookedUpAt: new Date().toISOString(), throttled: true };
   }
 
-  const sources = enabledSources().filter((source) => typeof source.searchByName === 'function');
+  const sources = lookupSources('searchByName');
 
   const results = await Promise.all(
     sources.map(async (source) => {
       try {
-        return { meta: source.meta, items: await source.searchByName(term), error: null };
+        const items = await source.searchByName(term);
+        recordCall(source.meta.id, true);
+        return { meta: source.meta, items, error: null };
       } catch (error) {
+        recordCall(source.meta.id, error.status === 404);
         return { meta: source.meta, items: [], error: error.message };
       }
     }),

@@ -12,6 +12,18 @@ export const meta = {
   name: 'GitHub Advisories',
   label: 'GitHub Security Advisory database',
   homepage: 'https://github.com/advisories',
+  // Without this the advisories API allows 60 requests an hour per IP, shared
+  // with every other tenant on a shared host - a budget a refresh every 20
+  // minutes cannot rely on, and the reason an unauthenticated deployment sees
+  // 403s that look like an outage at GitHub. With it, 5,000.
+  authEnv: 'GITHUB_TOKEN',
+  // Without the token the whole deployment gets 60 requests an hour here.
+  // The refresh needs 3 of them every 20 minutes and serves every visitor;
+  // a single-CVE lookup serves one. So when there is no token the refresh
+  // takes the budget and lookups skip this register - the alternative is a
+  // handful of lookups spending the hour's allowance and the feed itself
+  // going 403, which is how an anonymous deployment ends up looking broken.
+  lookupNeedsAuth: true,
 };
 
 /** The REST payload carries v3 and v4 blocks plus a legacy top-level score. */

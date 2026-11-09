@@ -7,6 +7,7 @@ import { mongoConfigured } from './lib/mongo.js';
 import { upsertRecords } from './store/cveStore.js';
 import { getMeta, putMeta } from './store/metaStore.js';
 import { readOnly } from './lib/refreshPolicy.js';
+import { record as recordCall } from './lib/breaker.js';
 
 const FEED_KEY = 'feed-merged';
 
@@ -24,6 +25,14 @@ function keepRecord(record) {
   return added >= Date.now() - config.kevDays * 86_400_000;
 }
 
+/**
+ * Does this process hold the credential a source names in `authEnv`?
+ *
+ * null for a source that needs none. Read from the environment rather than
+ * from config so it reflects the process as it is actually running.
+ */
+const authStateOf = (meta) => (meta.authEnv ? Boolean(process.env[meta.authEnv]) : null);
+
 /** Fetch every enabled source in parallel; one failure never fails the feed. */
 async function collect() {
   const sources = enabledSources();
@@ -31,13 +40,23 @@ async function collect() {
   const results = await Promise.all(
     sources.map(async (source) => {
       const startedAt = Date.now();
+      // Whether THIS process - the one actually fetching - holds the source's
+      // credential. Recorded in the snapshot rather than read at /healthz,
+      // because with cron owning the refresh those are two different
+      // processes with two different environments, and the fetcher's is the
+      // one that decides whether a request is authenticated.
+      const authenticated = authStateOf(source.meta);
       try {
         const items = await source.fetchItems();
+        // The refresh is the best evidence there is about a register, so it
+        // votes in the same breaker the per-request lookups consult.
+        recordCall(source.meta.id, true);
         return {
           meta: source.meta,
           items,
           health: {
             ...source.meta,
+            authenticated,
             ok: true,
             count: items.length,
             durationMs: Date.now() - startedAt,
@@ -46,11 +65,13 @@ async function collect() {
           },
         };
       } catch (error) {
+        recordCall(source.meta.id, false);
         return {
           meta: source.meta,
           items: [],
           health: {
             ...source.meta,
+            authenticated,
             ok: false,
             count: 0,
             durationMs: Date.now() - startedAt,
@@ -242,6 +263,7 @@ export function summarizeSourceHealth(cache) {
       configured: config.sources,
       checkedAt,
       ageSeconds,
+      unauthenticated: [],
       failing: [],
       counts: {},
     };
@@ -254,13 +276,23 @@ export function summarizeSourceHealth(cache) {
       name: s.name,
       error: s.error ?? 'unknown error',
       fetchedAt: s.fetchedAt ?? null,
+      // Named on the failure itself, because "403" and "fetched with no
+      // credential" together are not two facts but one answer.
+      ...(s.authenticated === false ? { authenticated: false, missing: s.authEnv ?? null } : {}),
     }));
+
+  // Which sources the refresher fetched anonymously. From the snapshot, so it
+  // describes the process that made the requests rather than the one
+  // answering this health check - with cron owning the refresh those differ,
+  // and that gap is exactly how a token can be set and still unused.
+  const unauthenticated = sources.filter((s) => s.authenticated === false).map((s) => s.id);
 
   return {
     ok: failing.length === 0,
     configured: config.sources,
     checkedAt,
     ageSeconds,
+    unauthenticated,
     failing,
     counts: Object.fromEntries(sources.map((s) => [s.id, s.ok ? s.count : null])),
   };

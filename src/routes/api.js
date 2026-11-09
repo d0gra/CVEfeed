@@ -2,6 +2,7 @@ import { Router, json } from 'express';
 import config from '../config.js';
 import { getFeed, refreshFeed } from '../aggregate.js';
 import { feedMeta, findRecord, queryFeed, summarize } from '../query.js';
+import { isBot } from '../lib/bots.js';
 import { enabledSources } from '../sources/index.js';
 import { stackFacets } from '../stack.js';
 import { EXPLOIT_SOURCE_META, getExploitIndex } from '../exploits.js';
@@ -117,7 +118,9 @@ router.get('/sources', (_req, res) => {
 
 router.get('/cve/:id', async (req, res, next) => {
   try {
-    const found = await findRecord(req.params.id);
+    // Same rule as the page: a crawler is served from the store, never from
+    // an upstream lookup.
+    const found = await findRecord(req.params.id, { allowUpstream: !isBot(req.get('user-agent')) });
     if (!found.item) return res.status(404).json({ error: found.reason });
     res.json({ meta: found.meta, item: found.item, pocRepos: found.pocRepos ?? [] });
   } catch (error) {

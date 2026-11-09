@@ -501,13 +501,20 @@ async function queryFromStore(feed, query) {
 }
 
 /** One record by any of its identifiers, with the same lookup fallback. */
-export async function findRecord(id) {
+/**
+ * @param id        a CVE, GHSA or EUVD id
+ * @param allowUpstream  whether a miss may be asked of the registers directly.
+ *   False for crawler traffic: the sitemap invites a walk of every CVE that
+ *   exists, and answering each miss upstream turns one crawl into hundreds of
+ *   thousands of requests nobody is waiting on.
+ */
+export async function findRecord(id, { allowUpstream = true } = {}) {
   const feed = await getFeed();
 
   if (feed.value.stored) {
     const stored = await findRecordById(id);
     if (stored) return { item: stored, meta: feedMeta(feed), pocRepos: await pocRepos(stored) };
-    return lookupFallback(id, feed);
+    return allowUpstream ? lookupFallback(id, feed) : notHere(feed);
   }
 
   const needle = String(id).toLowerCase();
@@ -524,8 +531,15 @@ export async function findRecord(id) {
   // into the repositories themselves; the feed listing is not.
   if (item) return { item, meta: feedMeta(feed), pocRepos: await pocRepos(item) };
 
-  return lookupFallback(id, feed);
+  return allowUpstream ? lookupFallback(id, feed) : notHere(feed);
 }
+
+/** A miss we chose not to spend an upstream request on. */
+const notHere = (feed) => ({
+  item: null,
+  meta: feedMeta(feed),
+  reason: 'Not found in the current feed window.',
+});
 
 /** Anything the store has never seen is asked of the registers directly. */
 async function lookupFallback(id, feed) {

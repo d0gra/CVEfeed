@@ -19,6 +19,7 @@
 import { refreshFeed } from '../src/aggregate.js';
 import { refreshExploitIndex } from '../src/exploits.js';
 import { closeMongo, mongoConfigured } from '../src/lib/mongo.js';
+import { anonymousNotes } from '../src/lib/credentials.js';
 
 const started = Date.now();
 const peakMb = () => (process.memoryUsage().rss / 1024 / 1024).toFixed(0);
@@ -48,7 +49,17 @@ try {
   const count = feed.value.stored ? feed.value.written : feed.value.items.length;
 
   for (const source of feed.value.sources) {
-    console.log(`  ${source.ok ? 'ok  ' : 'FAIL'}  ${source.id} (${source.count})${source.error ? `: ${source.error}` : ''}`);
+    const anon = source.authenticated === false ? ' [anonymous]' : '';
+    console.log(`  ${source.ok ? 'ok  ' : 'FAIL'}  ${source.id} (${source.count})${anon}${source.error ? `: ${source.error}` : ''}`);
+  }
+
+  // A source fetched anonymously is the quiet failure this script exists to
+  // make loud. See src/lib/credentials.js for why a token can be set and
+  // still absent from the process that does the fetching.
+  const notes = anonymousNotes(feed.value.sources);
+  if (notes.length) {
+    console.warn('');
+    for (const line of notes) console.warn(line);
   }
   console.log(
     `${feed.value.stored ? 'wrote' : 'cached'} ${count} records in ${Date.now() - started}ms, peak ${peakMb()}MB` +

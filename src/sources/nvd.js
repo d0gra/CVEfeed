@@ -11,6 +11,9 @@ export const meta = {
   name: 'NVD',
   label: 'NIST National Vulnerability Database',
   homepage: 'https://nvd.nist.gov/',
+  // 5 requests per 30s window without a key, 50 with one. NVD answers an
+  // over-budget caller with a 403 as well.
+  authEnv: 'NVD_API_KEY',
 };
 
 /** NVD publishes several CVSS blocks; prefer the newest version and a primary source. */

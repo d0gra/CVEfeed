@@ -15,6 +15,7 @@ process.env.MONGODB_URI = '';
 process.env.SOURCES = 'nvd,kev,github';
 
 const { summarizeSourceHealth } = await import('../src/aggregate.js');
+const { anonymousNotes } = await import('../src/lib/credentials.js');
 
 let pass = 0;
 let fail = 0;
@@ -74,9 +75,55 @@ check('an undated snapshot reports a null age, not zero', summarizeSourceHealth(
 const configured = summarizeSourceHealth(cacheOf([health('nvd', true)])).configured;
 check('the configured ids travel with it', Array.isArray(configured) && configured.includes('github'), configured.join(','));
 
-// 7. an error the source left blank must not read as a success
+// 7. a source fetched with no credential - the gap between "the token is set"
+//    and "the process making the request has it"
+const anon = summarizeSourceHealth(
+  cacheOf([
+    health('nvd', true, { authenticated: true, authEnv: 'NVD_API_KEY' }),
+    health('github', false, { authenticated: false, authEnv: 'GITHUB_TOKEN' }),
+  ]),
+);
+check('an anonymous source is listed', anon.unauthenticated.join(',') === 'github');
+check('  ...and said so on the failure itself', anon.failing[0].authenticated === false);
+check('  ...naming the variable that was missing', anon.failing[0].missing === 'GITHUB_TOKEN');
+check('an authenticated source is not listed', !anon.unauthenticated.includes('nvd'));
+check(
+  'a source needing no credential is not listed',
+  summarizeSourceHealth(cacheOf([health('kev', true)])).unauthenticated.length === 0,
+);
+check(
+  'a failing but authenticated source is not blamed on credentials',
+  summarizeSourceHealth(cacheOf([health('euvd', false, { authenticated: true })])).failing[0].authenticated === undefined,
+);
+
+// 8. an error the source left blank must not read as a success
 const silent = summarizeSourceHealth(cacheOf([health('euvd', false, { error: null })]));
 check('a failure with no message still fails', silent.ok === false && silent.failing[0].error === 'unknown error');
+
+// 9. the warning the refresh job prints when it fetched something anonymously
+const quiet = anonymousNotes([health('kev', true), health('nvd', true, { authenticated: true, authEnv: 'NVD_API_KEY' })]);
+check('nothing is said when every source was authenticated', quiet.length === 0);
+
+const noted = anonymousNotes([health('github', true, { authenticated: false, authEnv: 'GITHUB_TOKEN' })], '/srv/app');
+check('an anonymous source that worked is a note, not a warning', noted[0].startsWith('note'), noted[0]);
+check('  ...naming the variable', noted[0].includes('GITHUB_TOKEN'));
+check('  ...and the file dotenv actually reads', noted[1].includes('/srv/app/.env'));
+
+const warned = anonymousNotes(
+  [
+    health('nvd', true, { authenticated: false, authEnv: 'NVD_API_KEY' }),
+    health('github', false, { authenticated: false, authEnv: 'GITHUB_TOKEN' }),
+  ],
+  '/srv/app',
+);
+check('anonymous AND refused is a warning', warned[0].startsWith('WARNING  github'), warned[0]);
+check('  ...which says what an exhausted budget looks like', warned[0].includes('exhausted anonymous budget'));
+check(
+  '  ...and is sorted above the source that merely worked',
+  warned[1].startsWith('note') && warned[1].includes('nvd'),
+  warned[1],
+);
+check('  ...with the hosting-panel gap spelled out once', warned.filter((l) => l.includes('not cron')).length === 1);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 assert.equal(fail, 0);
