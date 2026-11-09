@@ -211,6 +211,61 @@ export async function getFeed({ force = false } = {}) {
   return feed;
 }
 
+/**
+ * Per-source health, condensed for a health check.
+ *
+ * /healthz used to report `sources: config.sources` - the ids the app was
+ * *configured* with, which say nothing about whether any of them answered. A
+ * source could be refusing every request for days and the endpoint stayed a
+ * flat "ok", which is how a 403 from GitHub went unnoticed. The refresh
+ * already records ok/count/error per source; this is that record, shaped so a
+ * monitor can act on it without parsing the whole feed summary.
+ *
+ * `failing` is the part to alert on. `counts` is for a human: a source that
+ * answers with zero records is not failing, but it is worth seeing.
+ */
+export function summarizeSourceHealth(cache) {
+  const sources = cache?.value?.sources;
+  // When each source was last tried. Health is only ever as current as the
+  // snapshot it comes from, and a worker that has not refreshed can hold a
+  // days-old one - so the age travels with the verdict rather than letting an
+  // "ok" from last week pass for an "ok" from this minute.
+  const checkedAt = cache?.value?.generatedAt ?? null;
+  const ageSeconds = checkedAt ? Math.max(0, Math.round((Date.now() - Date.parse(checkedAt)) / 1000)) : null;
+
+  // No refresh has landed yet, so health is unknown rather than good. Saying
+  // `ok: true` here would be the same lie in a different place.
+  if (!Array.isArray(sources) || sources.length === 0) {
+    return {
+      ok: null,
+      unknown: true,
+      configured: config.sources,
+      checkedAt,
+      ageSeconds,
+      failing: [],
+      counts: {},
+    };
+  }
+
+  const failing = sources
+    .filter((s) => !s.ok)
+    .map((s) => ({
+      id: s.id,
+      name: s.name,
+      error: s.error ?? 'unknown error',
+      fetchedAt: s.fetchedAt ?? null,
+    }));
+
+  return {
+    ok: failing.length === 0,
+    configured: config.sources,
+    checkedAt,
+    ageSeconds,
+    failing,
+    counts: Object.fromEntries(sources.map((s) => [s.id, s.ok ? s.count : null])),
+  };
+}
+
 export const feedCacheStatus = () => peek(FEED_KEY);
 
-export default { getFeed, refreshFeed, readOnly, comparators, feedCacheStatus };
+export default { getFeed, refreshFeed, readOnly, comparators, feedCacheStatus, summarizeSourceHealth };

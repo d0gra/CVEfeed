@@ -13,7 +13,7 @@
     "warm": "node scripts/warm-cache.js",
     "test:mcp": "node test/mcp-conformance.mjs",
     "test:exploits": "node test/exploit-resilience.mjs",
-    "test": "node test/terms.mjs && node test/suggest.mjs && node test/cache-bounds.mjs && node test/ratelimit.mjs && node test/poc.mjs && node test/exploit-resilience.mjs && node test/store.mjs && node test/deps.mjs && node test/mcp-conformance.mjs",
+    "test": "node test/terms.mjs && node test/health.mjs && node test/suggest.mjs && node test/cache-bounds.mjs && node test/ratelimit.mjs && node test/poc.mjs && node test/exploit-resilience.mjs && node test/store.mjs && node test/deps.mjs && node test/mcp-conformance.mjs",
     "test:cache": "node test/cache-bounds.mjs",
     "refresh": "node scripts/refresh.js",
     "refresh:all": "node scripts/refresh.js --exploits",
@@ -22,7 +22,8 @@
     "test:poc": "node test/poc.mjs",
     "test:deps": "node test/deps.mjs",
     "test:terms": "node test/terms.mjs",
-    "test:suggest": "node test/suggest.mjs"
+    "test:suggest": "node test/suggest.mjs",
+    "test:health": "node test/health.mjs"
   },
   "keywords": [
     "cve",

@@ -170,6 +170,19 @@ function writeUrl() {
 
 /* ---------- rendering ---------- */
 
+/**
+ * An upstream error, short enough for a one-line notice.
+ *
+ * The recorded message is deliberately verbose - status, rate-limit numbers,
+ * then the upstream's own sentence - because a log reader wants all of it.
+ * A visitor wants the first clause without the URL.
+ */
+function sourceReason(error) {
+  if (!error) return 'unknown error';
+  const withoutUrl = String(error).replace(/\s+for\s+https?:\/\/\S+/g, '');
+  return withoutUrl.split(' - ').slice(0, 2).join(' — ').trim().slice(0, 120);
+}
+
 function renderSources(sources = []) {
   dom.sources.innerHTML = sources
     .map((s) => {
@@ -560,7 +573,13 @@ function renderBanner(meta) {
 
   const offline = (lastPayload?.sources ?? []).filter((s) => !s.ok);
   if (offline.length) {
-    notes.push({ kind: 'warn', text: `Unavailable: ${offline.map((s) => s.name).join(', ')}.` });
+    notes.push({
+      kind: 'warn',
+      // With the reason, not just the name. "Unavailable: GitHub Advisories"
+      // reads as an outage at GitHub; "rate limit 0/60 remaining" says it is
+      // this deployment's budget, which is a different thing to go and fix.
+      text: `Unavailable: ${offline.map((s) => `${s.name} (${sourceReason(s.error)})`).join('; ')}.`,
+    });
   }
 
   for (const note of notes.reverse()) {

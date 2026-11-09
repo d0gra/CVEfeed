@@ -12,7 +12,7 @@ import { closeMongo, mongoStatus } from './lib/mongo.js';
 import { storeIndexWarnings } from './store/cveStore.js';
 import { missingPage, originFor } from './pages/index.js';
 import { llmsTxt } from './llms.js';
-import { getFeed, feedCacheStatus, readOnly, refreshFeed } from './aggregate.js';
+import { getFeed, feedCacheStatus, readOnly, refreshFeed, summarizeSourceHealth } from './aggregate.js';
 import { dataAgeMs } from './query.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -109,11 +109,15 @@ export function createApp() {
     const cache = feedCacheStatus();
     const ageMs = cache ? dataAgeMs(cache) : null;
     const stale = external && (ageMs == null || ageMs > config.staleAfterMs);
+    const sourceHealth = summarizeSourceHealth(cache);
     res.json({
-      // Still "ok" when stale: the app is up and serving. The refresh is a
-      // separate job, and it is reported separately below so a monitor can
-      // alert on it specifically.
-      status: 'ok',
+      // "ok" while every register answered the last refresh and that refresh
+      // is recent; "degraded" when one of those is not true. The app is up and
+      // serving either way - that is what the 200 says - but a register that
+      // has stopped answering is not a healthy feed, and reporting it as "ok"
+      // is how a 403 from GitHub sat unnoticed behind a green check. What is
+      // wrong is in `refresh.problem` and `sourceHealth.failing`.
+      status: stale || sourceHealth.ok === false ? 'degraded' : 'ok',
       uptimeSeconds: Math.round(process.uptime()),
       feedCached: Boolean(cache),
       // How old the DATA is - since the last refresh, not since this worker
@@ -142,7 +146,14 @@ export function createApp() {
       // it, and beyond that the next request waits for upstream.
       cacheTtlSeconds: Math.round(config.cacheTtlMs / 1000),
       staleWhileRevalidateSeconds: Math.round(config.staleWhileRevalidateMs / 1000),
+      // Kept as the configured id list, which is what this field has always
+      // meant. Whether those sources actually answered is below.
       sources: config.sources,
+      // Per-source health from the last refresh: which registers answered,
+      // how many records each returned, and the upstream's own words for the
+      // ones that refused. `failing` is the thing to alert on; `ok: null`
+      // means no refresh has landed yet, so nothing is known either way.
+      sourceHealth,
       // Why the database is or is not being used. The error text is the whole
       // point: a connection timeout means the network is blocked (Atlas
       // allowlist, or the host firewalling outbound 27017), whereas an auth
