@@ -36,7 +36,9 @@ export function oauthConsentPage({ canonical, assetVersion, supabaseUrl, publish
            and what it wants before you allow it.</p>
 
         <div id="oc-signin" hidden>
-          <p>Sign in to continue. We will email you a link - there is no password.</p>
+          <p>Sign in to continue. No password, and nothing to fill in.</p>
+          <button type="button" id="oc-github" class="poc-btn primary">Continue with GitHub</button>
+          <p class="oc-or">Already have an account by email? Sign in with a link instead.</p>
           <div class="mod-auth">
             <label for="oc-email">Email</label>
             <input id="oc-email" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com">
@@ -109,6 +111,15 @@ export function oauthConsentPage({ canonical, assetVersion, supabaseUrl, publish
       var base = { apikey: KEY, Authorization: 'Bearer ' + token() };
       if (extra) Object.keys(extra).forEach(function (k) { base[k] = extra[k]; });
       return base;
+    }
+
+    /* A full-page redirect, not a fetch: the provider dance has to happen in
+       the address bar. It returns to this same URL with the session in the
+       fragment, which claimTokenFromHash already knows what to do with. */
+    function signInWithGitHub() {
+      var back = window.location.origin + window.location.pathname +
+        '?authorization_id=' + encodeURIComponent(authorizationId);
+      window.location.assign(AUTH + '/authorize?provider=github&redirect_to=' + encodeURIComponent(back));
     }
 
     function sendLink() {
@@ -219,6 +230,7 @@ export function oauthConsentPage({ canonical, assetVersion, supabaseUrl, publish
       say('This page is the last step of an application sign-in. Start from the application and you will be sent here.');
       return;
     }
+    el('oc-github').addEventListener('click', signInWithGitHub);
     el('oc-send').addEventListener('click', sendLink);
     el('oc-email').addEventListener('keydown', function (event) { if (event.key === 'Enter') sendLink(); });
     el('oc-approve').addEventListener('click', function () { decide('approve'); });

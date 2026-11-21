@@ -28,7 +28,9 @@ export function adminMcpPage({ canonical, assetVersion, supabaseUrl, publishable
     ${
       configured
         ? `<div id="ad-signin" hidden>
-          <p class="lede">Sign in to read the gateway's records. We will email you a link.</p>
+          <p class="lede">Sign in to read the gateway's records.</p>
+          <button type="button" id="ad-github" class="poc-btn primary">Continue with GitHub</button>
+          <p class="oc-or">Or sign in by email link.</p>
           <div class="mod-auth">
             <label for="ad-email">Email</label>
             <input id="ad-email" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com">
@@ -61,6 +63,14 @@ export function adminMcpPage({ canonical, assetVersion, supabaseUrl, publishable
           <section>
             <h2>Recent failures</h2>
             <div class="ad-table" id="ad-errors"></div>
+          </section>
+
+          <section>
+            <h2>Accounts</h2>
+            <p class="ad-note">Anyone can sign up with GitHub. New accounts start at 60 calls an hour
+               and 10 dependency checks; raise one when you recognise it. Tiers set quota only &mdash;
+               access to this page comes from <code>app_metadata.role</code>, which is not settable here.</p>
+            <div class="ad-table" id="ad-users"></div>
           </section>
 
           <section>
@@ -247,6 +257,39 @@ export function adminMcpPage({ canonical, assetVersion, supabaseUrl, publishable
         ['took', function (r) { return num(r.duration_ms) + 'ms'; }]
       ], data.errors, 'Nothing has failed. ');
 
+      table('ad-users', [
+        ['account', function (r) { return r.email || r.user_id; }],
+        ['tier', function (r) { return r.tier; }],
+        ['calls/hour', function (r) { return num(r.rate_per_hour); }],
+        ['deps/hour', function (r) { return num(r.deps_per_hour); }],
+        ['calls (7d)', function (r) { return num(r.calls_7d); }],
+        ['joined', function (r) { return when(r.created_at); }],
+        ['', function (r, td) {
+          /* Labelled by what they do, not by their name. The top tier is
+             called 'admin' in the schema and grants nothing but a bigger
+             quota - dashboard access comes from app_metadata.role, which is
+             a different thing entirely and is not settable from here. */
+          var TIERS = { new: '60/hr', raised: '600/hr', admin: '5000/hr' };
+          ['new', 'raised', 'admin'].forEach(function (tier) {
+            if (tier === r.tier) return;
+            var button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'poc-btn small';
+            button.textContent = tier + ' \u00b7 ' + TIERS[tier];
+            button.title = 'Set this account to ' + TIERS[tier] + '. Does not grant dashboard access.';
+            button.addEventListener('click', function () {
+              button.disabled = true;
+              api('/users/' + encodeURIComponent(r.user_id), {
+                method: 'PATCH',
+                body: JSON.stringify({ tier: tier })
+              }).then(function (result) { if (result) load(); else button.disabled = false; });
+            });
+            td.appendChild(button);
+          });
+          return undefined;
+        }]
+      ], data.users, 'Nobody has signed in yet.');
+
       table('ad-keys', [
         ['key', function (r) { return r.key_prefix + '...'; }],
         ['label', function (r) { return r.label; }],
@@ -301,16 +344,20 @@ export function adminMcpPage({ canonical, assetVersion, supabaseUrl, publishable
 
     function load() {
       say('Loading...');
-      Promise.all([api('/gateway'), api('/host')]).then(function (results) {
+      Promise.all([api('/gateway'), api('/host'), api('/users')]).then(function (results) {
         if (!results[0] && !results[1]) return;
         el('ad-signin').hidden = true;
         el('ad-main').hidden = false;
-        if (results[0]) renderGateway(results[0]);
+        if (results[0]) renderGateway(Object.assign({ users: (results[2] || {}).users || [] }, results[0]));
         if (results[1]) renderHost(results[1]);
         say('');
       });
     }
 
+    el('ad-github').addEventListener('click', function () {
+      window.location.assign(AUTH + '/authorize?provider=github&redirect_to=' +
+        encodeURIComponent(window.location.origin + window.location.pathname));
+    });
     el('ad-send').addEventListener('click', sendLink);
     el('ad-email').addEventListener('keydown', function (e) { if (e.key === 'Enter') sendLink(); });
     el('ad-issue').addEventListener('click', function () {

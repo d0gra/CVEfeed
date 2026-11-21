@@ -58,6 +58,8 @@ const call = (path, init = {}) => fetch(`${base}${path}`, init);
 const guarded = [
   ['GET', '/admin/api/gateway', undefined],
   ['GET', '/admin/api/host', undefined],
+  ['GET', '/admin/api/users', undefined],
+  ['PATCH', '/admin/api/users/00000000-0000-4000-8000-000000000000', JSON.stringify({ tier: 'admin' })],
   ['POST', '/admin/api/keys', JSON.stringify({ label: 'x', ratePerHour: 10 })],
   ['PATCH', '/admin/api/keys/00000000-0000-4000-8000-000000000000', JSON.stringify({ disabled: true })],
 ];

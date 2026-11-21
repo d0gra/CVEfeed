@@ -28,6 +28,8 @@ import { pocStoreStats } from '../store/pocStore.js';
 import {
   gatewaySnapshot,
   issueKey,
+  listUsers,
+  setUserTier,
   supabaseConfigured,
   updateKey,
   verifyAdmin,
@@ -128,6 +130,31 @@ router.get('/api/host', requireAdmin, async (_req, res) => {
     indexWarnings: storeIndexWarnings(),
     pocs,
   });
+});
+
+/** Who has signed up, and on what terms. */
+router.get('/api/users', requireAdmin, async (_req, res, next) => {
+  try {
+    res.set('Cache-Control', 'no-store').json({ users: await listUsers() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** Move one account between tiers. */
+router.patch('/api/users/:id', requireAdmin, async (req, res) => {
+  try {
+    const row = await setUserTier(req.params.id, {
+      tier: typeof req.body?.tier === 'string' ? req.body.tier : undefined,
+      ratePerHour: req.body?.ratePerHour,
+      depsPerHour: req.body?.depsPerHour,
+      note: typeof req.body?.note === 'string' ? req.body.note : undefined,
+    });
+    console.log(`[cvefeed] admin ${req.adminEmail ?? 'unknown'} set ${row?.email ?? row?.user_id} to ${row?.tier}`);
+    res.set('Cache-Control', 'no-store').json(row);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 /** Mint a key. The plaintext is in this response and nowhere else, ever. */

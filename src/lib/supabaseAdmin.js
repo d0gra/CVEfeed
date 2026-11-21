@@ -124,6 +124,35 @@ export async function gatewaySnapshot() {
   };
 }
 
+/* ---------- accounts ---------- */
+
+/**
+ * Who has signed up, and on what terms.
+ *
+ * Sign-up is self-service through GitHub, so this list grows without anyone
+ * deciding anything. Everyone starts on the new-account tier; this is where
+ * someone is moved off it.
+ */
+export async function listUsers() {
+  return (await rest('mcp_users_public?select=*&order=created_at.desc&limit=200').catch(() => [])) ?? [];
+}
+
+/** Raise or lower one account. Passing only a tier applies that tier's numbers. */
+export async function setUserTier(userId, { tier, ratePerHour, depsPerHour, note }) {
+  const rows = await rest('rpc/mcp_set_user_tier', {
+    method: 'POST',
+    body: {
+      p_user_id: userId,
+      p_tier: tier ?? null,
+      p_rate: ratePerHour === undefined ? null : Number.parseInt(ratePerHour, 10),
+      p_deps: depsPerHour === undefined ? null : Number.parseInt(depsPerHour, 10),
+      p_note: note ?? null,
+    },
+  });
+  if (!Array.isArray(rows) || !rows.length) throw new Error('No account with that id.');
+  return rows[0];
+}
+
 /* ---------- key management ---------- */
 
 const KEY_PREFIX = 'cvf_live_';
@@ -175,4 +204,12 @@ export async function updateKey(id, { disabled, ratePerHour }) {
   return safe;
 }
 
-export default { supabaseConfigured, verifyAdmin, gatewaySnapshot, issueKey, updateKey };
+export default {
+  supabaseConfigured,
+  verifyAdmin,
+  gatewaySnapshot,
+  listUsers,
+  setUserTier,
+  issueKey,
+  updateKey,
+};

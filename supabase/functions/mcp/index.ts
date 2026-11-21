@@ -79,11 +79,19 @@ const CACHE_TTL: Record<string, string> = {
 // time, which is the exact traffic the upstream token bucket exists to stop.
 const ERROR_TTL = '1 minute';
 
-// An OAuth principal has no mcp_keys row to carry a limit, so these are the
-// defaults. An admin gets more room because the dashboard reads through this
-// same path.
-const USER_RATE_PER_HOUR = 600;
+// An OAuth account's limit comes from mcp_user_quotas, provisioned on first
+// sight at the new-account tier. Sign-up is self-service through GitHub, so
+// the limit cannot be a constant here - a stranger appears without anyone
+// deciding anything, and 'modest until raised' is the only safe default.
+//
+// An admin bypasses the table entirely; there is no reason to create a quota
+// row for the person who edits them.
 const ADMIN_RATE_PER_HOUR = 5000;
+const ADMIN_DEPS_PER_HOUR = 500;
+// Used only when the quota lookup itself fails. Denying on a database hiccup
+// would be worse than briefly serving someone at the lowest tier.
+const FALLBACK_RATE_PER_HOUR = 60;
+const FALLBACK_DEPS_PER_HOUR = 10;
 
 /* ---------- small helpers ---------- */
 
@@ -276,7 +284,16 @@ async function getManifest(db: SupabaseClient): Promise<Manifest | null> {
 
 /* ---------- authentication ---------- */
 
-type Principal = { id: string; kind: 'key' | 'user'; limit: number };
+type Principal = {
+  id: string;
+  kind: 'key' | 'user';
+  limit: number;
+  // check_dependencies fans out to OSV, and a CVE miss reaches the registers
+  // on a budget shared with the whole host, so the expensive tool is metered
+  // separately and far more tightly.
+  depsLimit: number;
+  tier?: string;
+};
 
 async function authenticate(
   db: SupabaseClient,
@@ -297,7 +314,17 @@ async function authenticate(
       | { principal: string; rate_per_hour: number }
       | undefined;
     if (!row) return { problem: 'That key is not valid, or has been revoked.' };
-    return { principal: { id: row.principal, kind: 'key', limit: row.rate_per_hour } };
+    return {
+      principal: {
+        id: row.principal,
+        kind: 'key',
+        limit: row.rate_per_hour,
+        // A tenth of the general allowance, matching the ratio the account
+        // tiers use, so a key does not need a second column to carry it.
+        depsLimit: Math.max(Math.round(row.rate_per_hour / 10), 1),
+        tier: 'key',
+      },
+    };
   }
 
   // A Supabase Auth access token - from the OAuth 2.1 flow an MCP client runs,
@@ -311,12 +338,34 @@ async function authenticate(
     // app_metadata only. raw_user_meta_data is editable by the user it
     // describes, so it must never decide anything about authorization.
     const claims = (payload.app_metadata ?? {}) as { role?: string };
-    const admin = claims.role === 'admin';
+    if (claims.role === 'admin') {
+      return {
+        principal: {
+          id: `user:${subject}`,
+          kind: 'user',
+          limit: ADMIN_RATE_PER_HOUR,
+          depsLimit: ADMIN_DEPS_PER_HOUR,
+          tier: 'admin',
+        },
+      };
+    }
+
+    // Provisions the new-account tier on first sight, so a GitHub sign-in is
+    // all someone needs to be known here - at a limit, not at ours.
+    const email = typeof payload.email === 'string' ? payload.email : null;
+    const { data, error } = await db.rpc('mcp_user_quota', { p_user_id: subject, p_email: email });
+    const tier = (Array.isArray(data) ? data[0] : data) as
+      | { tier: string; rate_per_hour: number; deps_per_hour: number }
+      | undefined;
+    if (error) console.error(`[gateway] quota lookup failed for ${subject}: ${error.message}`);
+
     return {
       principal: {
         id: `user:${subject}`,
         kind: 'user',
-        limit: admin ? ADMIN_RATE_PER_HOUR : USER_RATE_PER_HOUR,
+        limit: tier?.rate_per_hour ?? FALLBACK_RATE_PER_HOUR,
+        depsLimit: tier?.deps_per_hour ?? FALLBACK_DEPS_PER_HOUR,
+        tier: tier?.tier ?? 'new',
       },
     };
   } catch (error) {
@@ -483,6 +532,32 @@ async function handleMessage(
       return finish(
         rpcError(id, ERR_QUOTA, `Rate limit of ${principal.limit}/hour reached. Retry after ${retryAfter}s.`),
       );
+    }
+
+    // The dependency sweep gets its own, much smaller budget: it is the one
+    // tool whose cost lands on someone else's service.
+    if (String(params?.name ?? '') === 'check_dependencies') {
+      const { data: depsData } = await db.rpc('mcp_consume_quota', {
+        p_principal: `${principal.id}:deps`,
+        p_limit: principal.depsLimit,
+        p_window: '1 hour',
+      });
+      const depsVerdict = (Array.isArray(depsData) ? depsData[0] : depsData) as
+        | { allowed: boolean; reset_at: string }
+        | undefined;
+      if (depsVerdict && !depsVerdict.allowed) {
+        const retryAfter = Math.max(1, Math.round((Date.parse(depsVerdict.reset_at) - Date.now()) / 1000));
+        log.p_outcome = 'quota';
+        log.p_error_code = 'rate_limited_deps';
+        return finish(
+          rpcError(
+            id,
+            ERR_QUOTA,
+            `The dependency-check budget of ${principal.depsLimit}/hour is spent. Retry after ` +
+              `${retryAfter}s, or ask for a higher tier. Other tools are unaffected.`,
+          ),
+        );
+      }
     }
   }
 
