@@ -112,6 +112,40 @@ export const config = {
   // behind a proxy that terminates TLS, so set it in production.
   siteUrl: (process.env.SITE_URL || '').replace(/\/+$/, ''),
   refreshToken: process.env.REFRESH_TOKEN || '',
+  // The shared secret the Supabase MCP gateway signs its requests with.
+  // Unset disables /internal entirely, which is the same convention the
+  // moderation and refresh endpoints follow: absent means off, not open.
+  gatewaySecret: process.env.GATEWAY_SECRET || '',
+  // Public Supabase values, used by the OAuth consent page. Both are meant
+  // to be in a page: the publishable key identifies the project and grants
+  // nothing on its own. Unset, /oauth/consent says so rather than breaking.
+  supabaseUrl: (process.env.SUPABASE_URL || '').replace(/\/+$/, ''),
+  supabasePublishableKey: process.env.SUPABASE_PUBLISHABLE_KEY || '',
+  // Server-side only, and the one secret in here that must never reach a
+  // page: it bypasses RLS entirely. The admin dashboard reads the gateway's
+  // views with it; the browser only ever sees the rows it returns.
+  supabaseSecretKey: process.env.SUPABASE_SECRET_KEY || '',
+  // Where the MCP endpoint actually lives now. Unset, this app still serves
+  // /mcp as the real thing and says nothing about a move - which is what a
+  // self-hosted copy wants. Set, and /mcp starts pointing callers at the
+  // gateway instead.
+  mcpGatewayUrl: (process.env.MCP_GATEWAY_URL || '').replace(/\/+$/, ''),
+  // The date the local endpoint stops answering at all. Unset, it keeps
+  // answering indefinitely with a deprecation notice attached, because
+  // cutting agents off on a date nobody chose is worse than a long warning.
+  mcpLegacyUntil: process.env.MCP_LEGACY_UNTIL || '',
+  // Whether a magic link may create an account that does not exist yet.
+  // Off by default: with OAuth dynamic registration enabled, leaving this on
+  // would let anyone who can reach the consent page mint themselves an
+  // account and a quota on a security tool. Turn it on deliberately.
+  oauthAllowSignup: bool(process.env.OAUTH_ALLOW_SIGNUP, false),
+  // How far a signed request's timestamp may sit from ours. The window is
+  // the whole of the replay protection - there is no nonce store - which is
+  // affordable because these calls only read.
+  gatewaySkewMs: clamp(int(process.env.GATEWAY_SKEW_SECONDS, 300), 30, 3600) * 1000,
+  // One trusted caller, so this is a backstop against a leaked secret being
+  // hammered rather than a fairness limit between callers.
+  internalRateMax: clamp(int(process.env.INTERNAL_RATE_MAX, 600), 0, 100_000),
   requestTimeoutMs: clamp(int(process.env.REQUEST_TIMEOUT_SECONDS, 25), 5, 120) * 1000,
   // Registers ask that a client identify itself and say where to complain.
   // The old default pointed at https://github.com/ - a placeholder that gave

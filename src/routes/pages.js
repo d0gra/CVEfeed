@@ -17,7 +17,7 @@ import { approvedPocsForCve } from '../store/pocStore.js';
 import { issueChallenge, turnstileSiteKey, usingTurnstile } from '../lib/captcha.js';
 import { originFor } from '../pages/layout.js';
 import { cvePage, notFoundPage } from '../pages/cve.js';
-import { agentsPage, depsPage, earnPage, exploitedPage, hubIndexPage, hubPage, moderatePage, slugFor, stackCategoryPage, stackIndexPage, termsPage } from '../pages/index.js';
+import { agentsPage, depsPage, earnPage, exploitedPage, hubIndexPage, hubPage, moderatePage, oauthConsentPage, slugFor, stackCategoryPage, stackIndexPage, termsPage } from '../pages/index.js';
 
 const router = Router();
 
@@ -255,6 +255,32 @@ router.get('/terms', (req, res) => {
   html(res, termsPage({ origin, canonical: `${origin}/terms`, assetVersion }));
 });
 
+/**
+ * Where Supabase's OAuth server sends a user to approve a client. Configured
+ * as the Authorization Path on the project, so the URL is not ours to change
+ * freely - it must match what the dashboard holds.
+ *
+ * no-store because the page carries a live authorization request, and noindex
+ * because a consent screen in a search result is a phishing aid.
+ */
+router.get('/oauth/consent', (req, res) => {
+  const origin = originFor(req);
+  res
+    .status(200)
+    .type('html')
+    .set('Cache-Control', 'no-store')
+    .set('X-Robots-Tag', 'noindex')
+    .send(
+      oauthConsentPage({
+        canonical: `${origin}/oauth/consent`,
+        assetVersion,
+        supabaseUrl: config.supabaseUrl,
+        publishableKey: config.supabasePublishableKey,
+        allowSignup: config.oauthAllowSignup,
+      }),
+    );
+});
+
 router.get('/moderate', (req, res) => {
   const origin = originFor(req);
   // Unlisted admin page; the API enforces the token on every action.
@@ -292,6 +318,8 @@ router.get('/robots.txt', (req, res) => {
         '# query space is unbounded. The canonical pages above carry the content.',
         'Disallow: /*?',
         'Disallow: /moderate',
+        'Disallow: /oauth/',
+        'Disallow: /admin/',
         'Disallow: /api/',
         '',
         `Sitemap: ${origin}/sitemap.xml`,

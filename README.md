@@ -16,7 +16,7 @@
 [![mcp](https://img.shields.io/badge/MCP-6_tools-5a9c98?style=flat-square)](https://cve.zerocrew.in/mcp)
 [![sources](https://img.shields.io/badge/registers-5_merged-6e6d6a?style=flat-square)](#sources)
 [![licence](https://img.shields.io/badge/licence-noncommercial-9c5f12?style=flat-square)](#licence)
-[![no key](https://img.shields.io/badge/API_key-not_required-5f9b7e?style=flat-square)](#mcp)
+[![auth](https://img.shields.io/badge/MCP-OAuth_or_API_key-5f9b7e?style=flat-square)](#mcp)
 
 </div>
 
@@ -29,10 +29,11 @@ what landed overnight, whether anyone has written working code for it, where
 that code is, and which of the things you ship it lands on.
 
 ```bash
-claude mcp add --transport http cvefeed https://cve.zerocrew.in/mcp
+claude mcp add --transport http cvefeed https://imphhoxdrcgmjnamstbi.supabase.co/functions/v1/mcp
 ```
 
-No account. No API key. Any MCP client works.
+Your client opens a browser once so you can approve it. For CI, pass an API key
+instead. Calls are metered per account.
 
 ## What makes it different from a CVE list
 
@@ -500,8 +501,9 @@ own scheme is `http`.
 
 ## MCP
 
-`POST /mcp` speaks the Model Context Protocol over Streamable HTTP, so an agent
-can query the feed as a tool instead of scraping the page. No key, no account.
+The MCP endpoint is served by a Supabase edge function, which authenticates
+callers, meters them per account, caches results and keeps an audit trail. It
+reaches this app only on a cache miss, over a signed internal endpoint.
 
 | Tool | Does |
 | --- | --- |
@@ -513,8 +515,24 @@ can query the feed as a tool instead of scraping the page. No key, no account.
 | `feed_status` | What is stored, which registers answered, whether the database or the degraded fallback is serving, and how much of the corpus is searchable by name |
 
 ```bash
-claude mcp add --transport http cvefeed https://cve.zerocrew.in/mcp
+claude mcp add --transport http cvefeed https://imphhoxdrcgmjnamstbi.supabase.co/functions/v1/mcp
 ```
+
+Any client that speaks OAuth will start the flow itself. For an agent with no
+browser, present a key as a bearer token:
+
+```bash
+claude mcp add --transport http cvefeed https://imphhoxdrcgmjnamstbi.supabase.co/functions/v1/mcp \
+  --header "Authorization: Bearer cvf_live_..."
+```
+
+Keys are issued and revoked at `/admin/mcp`, which also shows calls, latency,
+cache hit rate and per-tool error rates from the gateway's audit trail.
+
+`POST https://cve.zerocrew.in/mcp` still answers for now, with a `Deprecation`
+header and a `Link` to the address above. Set `MCP_LEGACY_UNTIL` to the date it
+should stop; after that it returns `410` naming the new endpoint rather than
+failing silently.
 
 Ask it things like *"are any of our dependencies exploitable?"*, *"what landed
 overnight that changes my plan?"* or *"can CVE-2021-44228 actually be

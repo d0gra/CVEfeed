@@ -7,3 +7,5 @@ export { depsPage } from './deps.js';
 export { hubPage, hubIndexPage, hubPath, slugFor, HUB_KINDS } from './hubs.js';
 export { termsPage } from './legal.js';
 export { moderatePage } from './moderate.js';
+export { oauthConsentPage } from './oauthConsent.js';
+export { adminMcpPage } from './adminMcp.js';

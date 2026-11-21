@@ -517,3 +517,34 @@
 
 .linkrow { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 13px; }
 .linkrow a { color: var(--accent-ink); }
+
+/* The OAuth consent screen. Deliberately plain: the only thing that matters is
+   that the application name and the redirect target are legible. */
+.oc-facts { display: grid; grid-template-columns: max-content 1fr; gap: 8px 18px; margin: 20px 0; font-size: 14px; }
+.oc-facts dt { color: var(--ink-faint); }
+.oc-facts dd { margin: 0; word-break: break-word; }
+#oc-client { font-weight: 600; }
+#oc-redirect, #oc-scopes { font-family: var(--mono); font-size: 12.5px; }
+.oc-raw { margin: 12px 0 20px; font-size: 13px; }
+.oc-raw summary { cursor: pointer; color: var(--ink-faint); }
+.oc-raw pre { overflow-x: auto; font-size: 12px; line-height: 1.5; margin-top: 10px; }
+.oc-note { font-size: 13px; color: var(--ink-faint); max-width: 60ch; }
+
+/* The gateway dashboard. Dense on purpose: it is read when something is wrong. */
+.doc.wide { max-width: 1100px; }
+.ad-tiles { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0 24px; }
+.ad-tile { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px;
+  border: 1px solid var(--rule); border-radius: 6px; min-width: 92px; }
+.ad-tile strong { font-size: 19px; font-variant-numeric: tabular-nums; }
+.ad-tile span { font-size: 11.5px; color: var(--ink-faint); text-transform: lowercase; }
+.ad-table { overflow-x: auto; margin: 10px 0 26px; }
+.ad-table table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ad-table th { text-align: left; font-weight: 600; color: var(--ink-faint);
+  border-bottom: 1px solid var(--rule); padding: 6px 12px 6px 0; white-space: nowrap; }
+.ad-table td { padding: 7px 12px 7px 0; border-bottom: 1px solid var(--rule);
+  font-variant-numeric: tabular-nums; vertical-align: top; }
+.ad-table td:first-child, .ad-table th:first-child { font-family: var(--mono); font-size: 12px; }
+.ad-note { font-size: 13px; color: var(--ink-faint); }
+.ad-newkey { margin: 12px 0; padding: 12px; border: 1px solid var(--accent-ink);
+  border-radius: 6px; font-size: 12.5px; white-space: pre-wrap; word-break: break-all; }
+.poc-btn.small { padding: 3px 10px; font-size: 12px; }

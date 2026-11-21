@@ -17,7 +17,11 @@ export function llmsTxt() {
 > operator carries in their head, as a tool an agent can call. Five public
 > registers merged per CVE, enriched with whether exploit code actually exists
 > and how reachable it is, plus a version-aware dependency check and a
-> dedicated view of the AI and agent stack. No account and no API key.
+> dedicated view of the AI and agent stack.${
+    config.mcpGatewayUrl
+      ? ' The MCP endpoint requires authentication; the HTTP API does not.'
+      : ' No account and no API key.'
+  }
 
 ## Reading this data safely
 
@@ -48,7 +52,15 @@ the best way to consume this feed. Tools:
 - \`feed_status\` - stored record count, source health, data age, whether the
   database or the in-memory fallback is serving, and the available categories
 
-Add it to a client with the endpoint URL alone; no authentication is required.
+${
+    config.mcpGatewayUrl
+      ? `Endpoint: \`${config.mcpGatewayUrl}\`
+
+It requires authentication. A client that speaks OAuth will start the flow on
+its own; otherwise pass an API key as a bearer token. Calls are metered per
+account.`
+      : 'Add it to a client with the endpoint URL alone; no authentication is required.'
+  }
 
 ## HTTP API
 

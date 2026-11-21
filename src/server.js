@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import config from './config.js';
 import api from './routes/api.js';
 import { mountMcp } from './mcp.js';
+import internal from './routes/internal.js';
+import admin from './routes/admin.js';
 import { createLimiter } from './lib/ratelimit.js';
 import pages, { agentsPageHandler, assetVersionValue, setAssetVersion } from './routes/pages.js';
 import { closeMongo, mongoStatus } from './lib/mongo.js';
@@ -55,12 +57,16 @@ export function createApp() {
   // Correct client IPs and protocol behind Hostinger's reverse proxy.
   app.set('trust proxy', true);
   app.use(compression());
-  // 64kb is plenty for every request but one: a dependency sweep can carry a
-  // whole package-lock.json. That route parses its own body with its own cap,
-  // so this parser has to stand aside rather than rejecting it at 64kb first.
+  // 64kb is plenty for every request but two, and both carry a whole
+  // package-lock.json: the public dependency sweep, and the gateway's tool
+  // call behind it. Each parses its own body at its own cap, so this parser
+  // has to stand aside rather than rejecting them at 64kb first - which is
+  // exactly what the old /mcp endpoint did, answering an ordinary lockfile
+  // with a 502 that blamed the upstream feed.
+  const OWN_BODY_PARSER = new Set(['/api/dependencies/check', '/internal/mcp-tool']);
   const parseJson = express.json({ limit: '64kb' });
   app.use((req, res, next) =>
-    req.path === '/api/dependencies/check' ? next() : parseJson(req, res, next),
+    OWN_BODY_PARSER.has(req.path) ? next() : parseJson(req, res, next),
   );
 
   // Per-IP rate limiting. Static assets and /healthz are exempt (a single page
@@ -110,6 +116,12 @@ export function createApp() {
     const ageMs = cache ? dataAgeMs(cache) : null;
     const stale = external && (ageMs == null || ageMs > config.staleAfterMs);
     const sourceHealth = summarizeSourceHealth(cache);
+    // A store that is configured but unreachable means every data path is
+    // either degraded to memory or failing outright. Reporting "ok" there is
+    // how a green check came to sit in front of an endpoint that answered
+    // nothing at all.
+    const store = mongoStatus();
+    const storeDown = store.configured && !store.connected;
     res.json({
       // "ok" while every register answered the last refresh and that refresh
       // is recent; "degraded" when one of those is not true. The app is up and
@@ -117,7 +129,7 @@ export function createApp() {
       // has stopped answering is not a healthy feed, and reporting it as "ok"
       // is how a 403 from GitHub sat unnoticed behind a green check. What is
       // wrong is in `refresh.problem` and `sourceHealth.failing`.
-      status: stale || sourceHealth.ok === false ? 'degraded' : 'ok',
+      status: stale || storeDown || sourceHealth.ok === false ? 'degraded' : 'ok',
       uptimeSeconds: Math.round(process.uptime()),
       feedCached: Boolean(cache),
       // How old the DATA is - since the last refresh, not since this worker
@@ -158,7 +170,7 @@ export function createApp() {
       // point: a connection timeout means the network is blocked (Atlas
       // allowlist, or the host firewalling outbound 27017), whereas an auth
       // error means the credentials are wrong. It saves guessing.
-      mongo: mongoStatus(),
+      mongo: store,
       // Indexes that could not be created, and a text index whose live spec
       // has drifted from the one in the source. Both used to be swallowed
       // silently, which meant the app booted green on whatever indexes
@@ -167,6 +179,16 @@ export function createApp() {
       indexWarnings: storeIndexWarnings(),
     });
   });
+
+  // The gateway's seam. Mounted ahead of the public limiters because it is
+  // reached by one signed caller rather than by the internet, and it carries
+  // its own limiter as a backstop should the secret ever leak.
+  app.use('/internal', internal);
+
+  // The gateway dashboard and its API. Mounted before the page limiter so a
+  // dashboard that fires several reads at once is not throttled as though it
+  // were a crawler; it carries the API limiter instead.
+  app.use('/admin', admin);
 
   // A browser asking for /mcp gets the page; an MCP client gets the protocol.
   app.use('/mcp', mcpLimiter);
@@ -276,7 +298,7 @@ export function start() {
         feed.value.stored
           ? `[cvefeed] store ready: ${feed.fromCache ? 'using the existing refresh' : `wrote ${feed.value.written} records`}` +
             ` from ${ok}/${feed.value.sources.length} sources`
-          : `[cvefeed] warm cache ready: ${feed.value.items.length} records from ${ok}/${feed.value.sources.length} sources`,
+          : `[cvefeed] warm cache ready: ${(feed.value.items ?? []).length} records from ${ok}/${feed.value.sources.length} sources`,
       );
     },
     (error) => console.error('[cvefeed] initial fetch failed:', error.message),

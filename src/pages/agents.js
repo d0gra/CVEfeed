@@ -7,6 +7,7 @@
  */
 import { breadcrumbJsonLd, escapeHtml, layout } from './layout.js';
 import { STACK_CATEGORIES } from '../stack.js';
+import config from '../config.js';
 
 const TOOLS = [
   {
@@ -42,7 +43,10 @@ const TOOLS = [
 ];
 
 export function agentsPage({ origin, canonical, assetVersion, stats }) {
-  const endpoint = `${origin}/mcp`;
+  // The endpoint is the gateway once there is one. This page is the thing an
+  // agent is pointed at, so it must name the address that actually works.
+  const endpoint = config.mcpGatewayUrl || `${origin}/mcp`;
+  const authenticated = Boolean(config.mcpGatewayUrl);
 
   const tools = TOOLS.map(
     (t) => `<li class="tool">
@@ -63,12 +67,22 @@ export function agentsPage({ origin, canonical, assetVersion, stats }) {
     agent — pentest, red team, triage, or the one reviewing your pull requests — gets what
     a good operator actually carries in their head: what landed overnight, whether anyone has
     written working code for it, where that code is, and which of the things you ship it lands on.</p>
-    <p class="lede">One command. No account, no key.</p>
+    <p class="lede">One command, and one browser prompt to authorize it.</p>
 
     <section class="hero-add">
       <h2>Add it</h2>
       <pre><code>claude mcp add --transport http cvefeed ${escapeHtml(endpoint)}</code></pre>
-      <p class="aside">No account, no API key. Any MCP client works — the endpoint is all it needs.</p>
+      ${
+        authenticated
+          ? `<p class="aside">Your client opens a browser once so you can approve it, then connects.
+          Any MCP client that speaks OAuth works this way. For CI, or an agent with no browser,
+          use a key instead:</p>
+      <pre><code>claude mcp add --transport http cvefeed ${escapeHtml(endpoint)} \\
+  --header "Authorization: Bearer cvf_live_..."</code></pre>
+      <p class="aside">Calls are metered per account, so a key is also how you get a limit of your
+          own rather than sharing one.</p>`
+          : `<p class="aside">No account, no API key. Any MCP client works — the endpoint is all it needs.</p>`
+      }
     </section>
 
     <section class="block">
@@ -103,7 +117,7 @@ export function agentsPage({ origin, canonical, assetVersion, stats }) {
       whether <strong>proof-of-concept</strong> code is published, and whether a Nuclei template
       means it is being scanned for at internet scale. Sort by that and your agent prioritises the
       way someone experienced would.</p>
-      <p class="stat-line"><strong>${'${stats?.withExploitSignal ?? 0}'}</strong> of the records currently stored
+      <p class="stat-line"><strong>${stats?.withExploitSignal ?? 0}</strong> of the records currently stored
       carry at least one exploit signal.</p>
     </section>
 
@@ -207,7 +221,12 @@ curl '${escapeHtml(origin)}/api/cve/CVE-2021-44228'</code></pre>
   return layout({
     title: 'Give your agent the instincts of an elite hacker | CVE Feed',
     description:
-      'An MCP endpoint that gives a pentest, red-team or triage agent live knowledge of vulnerabilities and the exploits that exist for them - Metasploit modules, Exploit-DB entries, public PoCs - plus a dependency check by exact version. No account, no API key.',
+      'An MCP endpoint that gives a pentest, red-team or triage agent live knowledge of ' +
+      'vulnerabilities and the exploits that exist for them - Metasploit modules, Exploit-DB ' +
+      'entries, public PoCs - plus a dependency check by exact version. ' +
+      (authenticated
+        ? 'Free to use; connect with OAuth or an API key.'
+        : 'No account, no API key.'),
     canonical,
     body,
     current: '/mcp',

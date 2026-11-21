@@ -183,7 +183,15 @@ function summarize(items) {
  */
 export function dataAgeMs(feed) {
   const generated = Date.parse(feed?.value?.generatedAt ?? '');
-  return Number.isFinite(generated) ? Date.now() - generated : (feed?.ageMs ?? null);
+  if (Number.isFinite(generated)) return Date.now() - generated;
+  // No generatedAt at all means no refresh has ever landed. The cache
+  // entry's own age says when this worker last looked, not how old the data
+  // is, so returning it reports a feed that has never been built as fresh -
+  // a green health check in front of an endpoint that cannot answer.
+  // Unknown is the honest answer, and every caller already reads null as
+  // stale.
+  if (feed?.value?.neverRefreshed) return null;
+  return feed?.ageMs ?? null;
 }
 
 const feedMeta = (feed) => {
@@ -312,7 +320,14 @@ export async function queryFeed(query = {}) {
       ...(memoryMatchedBy !== 'words' ? { matchedBy: memoryMatchedBy } : {}),
       ...(String(query.q ?? '').trim() ? { q: String(query.q).trim() } : {}),
       total: sorted.length,
-      totalUnfiltered: feed.value.items.length,
+      // The pool we actually searched. When the store was reachable at the
+      // time this snapshot was written but is not now, there is no snapshot
+      // to count - and reporting a corpus size of zero would read as
+      // "nothing exists", which is the one thing a vulnerability feed must
+      // never say by accident. `degraded` is how a caller tells an empty
+      // answer apart from an unavailable one.
+      totalUnfiltered: pool.length,
+      ...(feed.value.items == null ? { degraded: true } : {}),
       page,
       limit,
       pages: Math.max(Math.ceil(sorted.length / limit), 1),
@@ -518,7 +533,7 @@ export async function findRecord(id, { allowUpstream = true } = {}) {
   }
 
   const needle = String(id).toLowerCase();
-  const item = feed.value.items.find(
+  const item = (feed.value.items ?? []).find(
     (candidate) =>
       candidate.id?.toLowerCase() === needle ||
       candidate.cveId?.toLowerCase() === needle ||
