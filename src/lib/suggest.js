@@ -151,6 +151,57 @@ export async function suggestFor(prefix, { limit = 8 } = {}) {
   }));
 }
 
+/** Edit distance with adjacent swaps counted as one edit ("lodsah" -> "lodash"). */
+export function editDistance(a, b, ceiling) {
+  if (Math.abs(a.length - b.length) > ceiling) return ceiling + 1;
+  const rows = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= b.length; j++) rows[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    let best = Infinity;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let d = Math.min(rows[i - 1][j] + 1, rows[i][j - 1] + 1, rows[i - 1][j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d = Math.min(d, rows[i - 2][j - 2] + 1);
+      rows[i][j] = d;
+      best = Math.min(best, d);
+    }
+    if (best > ceiling) return ceiling + 1;
+  }
+  return rows[a.length][b.length];
+}
+
+/**
+ * Known names a mistyped one is probably meant to be: "jakson-databind",
+ * "lodsh", "aache".
+ *
+ * Deliberately narrow. Only package, vendor and product names, and only for a
+ * single word - a nickname is not a misspelling of anything in the corpus, and
+ * guessing at it here would be worse than saying nothing. Nicknames are what
+ * research_vulnerability is for.
+ */
+export async function nearestNames(term, { limit = 3 } = {}) {
+  const wanted = normalizeTerm(term);
+  if (!wanted || wanted.includes(' ') || wanted.length < 4) return [];
+  // One edit for short names, two for longer ones: "lodsh" is close to
+  // "lodash", but at two edits a five-letter word is close to everything.
+  const ceiling = wanted.length <= 6 ? 1 : 2;
+
+  const rows = await vocabulary();
+  const seen = new Set();
+  const hits = [];
+  for (const row of rows) {
+    if (row.kind === 'subject') continue;
+    const value = String(row.value).toLowerCase();
+    if (value === wanted || seen.has(value)) continue;
+    const distance = editDistance(wanted, value, ceiling);
+    if (distance > ceiling) continue;
+    seen.add(value);
+    hits.push({ value: row.value, kind: row.kind, ecosystem: row.ecosystem, count: row.count, distance });
+  }
+  hits.sort((a, b) => a.distance - b.distance || (b.count ?? 0) - (a.count ?? 0));
+  return hits.slice(0, limit).map(({ value, kind, ecosystem }) => ({ value, kind, ...(ecosystem ? { ecosystem } : {}) }));
+}
+
 /**
  * Is this term a package name, and which registries is it in?
  *

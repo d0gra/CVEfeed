@@ -13,6 +13,7 @@ import { STACK_CATEGORY_IDS } from './stack.js';
 import { attachSignals, MATURITY, pocLinksFor } from './exploits.js';
 import { aggregateStats, findRecordById, firstMode, queryRecords, upsertRecords } from './store/cveStore.js';
 import { normalizeTerm } from './lib/terms.js';
+import { relevance, significantTerms, termPattern } from './lib/queryTerms.js';
 import { packageHintFor } from './lib/suggest.js';
 import { mongoConfigured } from './lib/mongo.js';
 
@@ -48,6 +49,9 @@ function applyFilters(items, query, { mode = 'words' } = {}) {
   const minScore = Number.parseFloat(query.minScore);
   const days = int(query.days, 0);
   const exploitedOnly = ['1', 'true', 'yes'].includes(String(query.exploited ?? '').toLowerCase());
+  // The same terms the database path requires, read by the same module, so
+  // degraded mode cannot answer a different question.
+  const patterns = significantTerms(needle).map(termPattern);
 
   const since = days > 0 ? Date.now() - days * 86_400_000 : null;
 
@@ -114,7 +118,9 @@ function applyFilters(items, query, { mode = 'words' } = {}) {
         .filter(Boolean)
         .join(' ')
         .toLowerCase();
-      if (!haystack.includes(needle)) return false;
+      // Every term, anywhere - AND, as the database path does. Matching the
+      // whole query as one phrase found almost nothing for "apache struts rce".
+      if (patterns.length ? !patterns.every((p) => p.test(haystack)) : !haystack.includes(needle)) return false;
     }
 
     return true;
@@ -271,7 +277,13 @@ export async function queryFeed(query = {}) {
 
   const sortKey = String(query.sort ?? 'priority');
   const comparator = comparators[sortKey] ?? comparators.priority;
-  const sorted = [...filtered].sort(comparator);
+  // Relevance first for a search nobody asked to sort, as the database does
+  // with textScore; the usual priority breaks ties.
+  const terms = significantTerms(query.q);
+  const ranked = !comparators[query.sort] && terms.length;
+  const score = (item) =>
+    relevance(terms, { title: item.title ?? '', rest: `${item.description ?? ''} ${item.vendor ?? ''} ${item.product ?? ''}` });
+  const sorted = [...filtered].sort(ranked ? (a, b) => score(b) - score(a) || comparator(a, b) : comparator);
 
   const limit = Math.min(Math.max(int(query.limit, 50), 1), 500);
   const page = Math.max(int(query.page, 1), 1);

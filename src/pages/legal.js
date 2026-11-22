@@ -46,6 +46,10 @@ export function termsPage({ origin, canonical, assetVersion }) {
       the address itself. A contact you provide is <strong>kept private</strong> for moderation or credit
       and is never displayed. Do not submit personal data or live credentials; submissions that contain
       them are rejected.</p>
+      <p>When an agent uses <code>research_vulnerability</code>, the search phrase it supplies is sent
+      to a third-party web search provider to find pages about that vulnerability. Only the phrase
+      is sent: never your dependency lists, lockfiles or account details. Answers are cached for a
+      day, so a repeated question is not sent again.</p>
     </section>
 
     <section class="callout callout-exploit">

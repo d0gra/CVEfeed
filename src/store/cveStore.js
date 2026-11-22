@@ -14,6 +14,7 @@ import { getDb } from '../lib/mongo.js';
 import { SEVERITY_ORDER } from '../lib/severity.js';
 import { STACK_CATEGORY_IDS } from '../stack.js';
 import { normalizeTerm } from '../lib/terms.js';
+import { significantTerms, termPattern, textSearchString } from '../lib/queryTerms.js';
 import { cached } from '../lib/cache.js';
 import config from '../config.js';
 
@@ -342,7 +343,20 @@ export function buildFilter(query = {}, { substring = false, mode } = {}) {
       // and only for terms long enough to be worth scanning for.
       and.push({ $or: substringClauses(term) });
     } else {
-      and.push({ $text: { $search: term } });
+      // Every significant term must match somewhere a name or the prose
+      // lives - AND, where $text alone would OR them. $text still runs, for
+      // recall and for the relevance score the results are ranked by, but it
+      // no longer decides what matches. Package-shaped terms like log4j-core
+      // are kept away from it entirely: it would split them at the hyphen.
+      const terms = significantTerms(term);
+      const text = textSearchString(terms);
+      if (text) and.push({ $text: { $search: text } });
+      for (const t of terms) {
+        const pattern = termPattern(t);
+        and.push({ $or: TERM_FIELDS.map((field) => ({ [field]: pattern })) });
+      }
+      // Nothing but stopwords ("find the cve"): let $text have the original.
+      if (!terms.length) and.push({ $text: { $search: term } });
     }
   }
 
@@ -361,6 +375,21 @@ export function buildFilter(query = {}, { substring = false, mode } = {}) {
 
   return and.length ? { $and: and } : {};
 }
+
+/** Where a search term may match: the names a record is known by, and its prose. */
+const TERM_FIELDS = [
+  'title',
+  'description',
+  'vendor',
+  'product',
+  'searchTerms',
+  'vendors',
+  'products',
+  'packages.name',
+  'stack.subjects',
+];
+
+const usesText = (filter) => Array.isArray(filter?.$and) && filter.$and.some((clause) => clause.$text);
 
 const SORTS = {
   priority: { exploited: -1, score: -1, published: -1 },
@@ -397,11 +426,18 @@ export async function queryRecords(query = {}) {
   const limit = Math.min(Math.max(int(query.limit, 50), 1), 500);
   const page = Math.max(int(query.page, 1), 1);
 
+  // A search the caller did not ask to sort is ranked by relevance first, then
+  // by the usual priority. Sorting a text search by severity alone is how
+  // "apache struts rce" used to open with Log4j.
+  const explicitSort = Boolean(SORTS[query.sort]);
+  const sortFor = (filter) =>
+    !explicitSort && usesText(filter) ? { score: { $meta: 'textScore' }, ...SORTS.priority } : SORTS[sortKey];
+
   const run = async (filter) => {
     const [rows, total] = await Promise.all([
       col
         .find(filter, query.fields === 'row' ? { projection: ROW_PROJECTION } : {})
-        .sort(SORTS[sortKey])
+        .sort(sortFor(filter))
         .skip((page - 1) * limit)
         .limit(limit)
         .toArray(),
