@@ -50,7 +50,10 @@ const call = (path, init = {}) => fetch(`${base}${path}`, init);
   check('it offers a sign-in', html.includes('id="ad-signin"'));
   // The one value that must never be in a page: it bypasses RLS entirely.
   check('the secret key is not in the page', !html.includes(config.supabaseSecretKey));
-  check('the publishable key is', html.includes(config.supabasePublishableKey));
+  // GitHub sign-in needs only the Auth URL; the email form that needed the
+  // publishable key is gone, so the page carries one value fewer.
+  check('it carries the Auth URL for GitHub sign-in', html.includes('name="cvefeed-auth"'));
+  check('it has no email sign-in left', !/type="email"|\/otp/.test(html));
 }
 
 /* ---------- the gate ---------- */

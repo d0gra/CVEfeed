@@ -8,6 +8,7 @@ import api from './routes/api.js';
 import { mountMcp } from './mcp.js';
 import internal from './routes/internal.js';
 import admin from './routes/admin.js';
+import account from './routes/account.js';
 import { createLimiter } from './lib/ratelimit.js';
 import pages, { agentsPageHandler, assetVersionValue, setAssetVersion } from './routes/pages.js';
 import { closeMongo, mongoStatus } from './lib/mongo.js';
@@ -189,6 +190,9 @@ export function createApp() {
   // dashboard that fires several reads at once is not throttled as though it
   // were a crawler; it carries the API limiter instead.
   app.use('/admin', admin);
+
+  // The signed-in account: quota, and keys you mint for yourself.
+  app.use('/account', account);
 
   // A browser asking for /mcp gets the page; an MCP client gets the protocol.
   app.use('/mcp', mcpLimiter);

@@ -5,23 +5,31 @@
  * this, an MCP client gets the protocol. One URL to give someone, whichever
  * of the two they are.
  *
- * Kept short on purpose. Someone arriving here wants to connect a client, so
- * the install buttons come first and the explanation is a paragraph, not an
- * essay. The longer argument lives in the README.
+ * Signed out, it is a pitch and a sign-in button. Signed in with GitHub, it is
+ * your account - tier, what you have left of each budget, your keys - and the
+ * install buttons. Hiding the buttons is presentation: the URL is public and
+ * the gateway refusing unauthenticated calls is the enforcement. But a button
+ * that leads straight into a sign-in prompt is a worse first step than signing
+ * in here, where you can see what you are getting.
  *
  * How each button installs, per each client's own documentation:
  *
- *   VS Code   vscode:mcp/install?<url-encoded JSON {name, type, url}>
- *   Cursor    cursor://anysphere.cursor-deeplink/mcp/install?name=...&config=<base64 JSON {url}>
- *   Claude    no install link exists - the button copies `claude mcp add`, and
- *             claude.ai takes the URL under Customize > Connectors
- *   OpenCode  no install link exists - the button copies `opencode mcp add`
+ *   one click  VS Code    vscode:mcp/install?<url-encoded JSON {name, type, url}>
+ *              Cursor     cursor://anysphere.cursor-deeplink/mcp/install?name=&config=<base64 {url}>
+ *              LM Studio  https://lmstudio.ai/install-mcp?name=&config=<base64 {url}>
+ *   command    Claude     claude mcp add --transport http
+ *              OpenCode   opencode mcp add --url
+ *              OpenClaw   openclaw mcp add --url --transport streamable-http, then login
+ *              Codex      codex mcp add --url, then login
+ *   config     Hermes     ~/.hermes/config.yaml, mcp_servers with auth: oauth
+ *              Zed        settings.json, context_servers with a url and no auth header
  *
- * Every client here runs the OAuth flow on first use, so the URL is all any of
+ * Every one of them runs the OAuth flow on first use, so the URL is all any of
  * them needs; a key is offered underneath for CI and headless agents.
  */
 import { breadcrumbJsonLd, escapeHtml, layout } from './layout.js';
 import { brandIcon } from './brandIcons.js';
+import { sessionHead } from './signin.js';
 import config from '../config.js';
 
 const SERVER_NAME = 'cvefeed';
@@ -35,57 +43,148 @@ const TOOLS = [
   ['feed_status', 'What is stored and which sources answered, so an empty result can be read correctly.'],
 ];
 
-/** The one-click links, built from the endpoint so they never drift from it. */
-function installTargets(endpoint) {
-  const vscodeConfig = { name: SERVER_NAME, type: 'http', url: endpoint };
-  const cursorConfig = Buffer.from(JSON.stringify({ url: endpoint })).toString('base64');
+const base64Json = (value) => encodeURIComponent(Buffer.from(JSON.stringify(value)).toString('base64'));
 
+/** The install buttons, built from the endpoint so they never drift from it. */
+function installTargets(endpoint) {
+  const vscode = { name: SERVER_NAME, type: 'http', url: endpoint };
   return [
     {
-      id: 'vscode',
-      label: 'Add to VS Code',
-      href: `vscode:mcp/install?${encodeURIComponent(JSON.stringify(vscodeConfig))}`,
+      id: 'vscode', group: 'click', label: 'VS Code',
+      href: `vscode:mcp/install?${encodeURIComponent(JSON.stringify(vscode))}`,
       hint: 'Opens VS Code to review and install.',
     },
     {
-      id: 'cursor',
-      label: 'Add to Cursor',
-      href: `cursor://anysphere.cursor-deeplink/mcp/install?name=${SERVER_NAME}&config=${encodeURIComponent(cursorConfig)}`,
+      id: 'cursor', group: 'click', label: 'Cursor',
+      href: `cursor://anysphere.cursor-deeplink/mcp/install?name=${SERVER_NAME}&config=${base64Json({ url: endpoint })}`,
       hint: 'Opens Cursor to confirm the install.',
     },
     {
-      id: 'claude',
-      label: 'Add to Claude',
+      id: 'lmstudio', group: 'click', label: 'LM Studio',
+      href: `https://lmstudio.ai/install-mcp?name=${SERVER_NAME}&config=${base64Json({ url: endpoint })}`,
+      hint: 'Opens LM Studio (0.3.17 or later) to add the server.',
+    },
+    {
+      id: 'claude', group: 'copy', label: 'Claude',
       copy: `claude mcp add --transport http ${SERVER_NAME} ${endpoint}`,
       hint: 'Copies the Claude Code command. On claude.ai, add the URL under Customize, Connectors.',
     },
     {
-      id: 'opencode',
-      label: 'Add to OpenCode',
+      id: 'opencode', group: 'copy', label: 'OpenCode',
       copy: `opencode mcp add ${SERVER_NAME} --url ${endpoint}`,
       hint: 'Copies the OpenCode command.',
+    },
+    {
+      id: 'openclaw', group: 'copy', label: 'OpenClaw',
+      copy: `openclaw mcp add ${SERVER_NAME} --url ${endpoint} --transport streamable-http && openclaw mcp login ${SERVER_NAME}`,
+      hint: 'Copies the OpenClaw commands: add the server, then sign in.',
+    },
+    {
+      id: 'codex', group: 'copy', label: 'Codex',
+      copy: `codex mcp add ${SERVER_NAME} --url ${endpoint} && codex mcp login ${SERVER_NAME}`,
+      hint: 'Copies the Codex commands: add the server, then sign in.',
+    },
+    {
+      id: 'hermes', group: 'copy', label: 'Hermes',
+      copy: `mcp_servers:\n  ${SERVER_NAME}:\n    url: "${endpoint}"\n    auth: oauth`,
+      hint: 'Copies a block for ~/.hermes/config.yaml.',
+    },
+    {
+      id: 'zed', group: 'copy', label: 'Zed',
+      copy: `"context_servers": {\n  "${SERVER_NAME}": { "url": "${endpoint}" }\n}`,
+      hint: 'Copies a block for Zed settings.json. Zed signs you in when it first connects.',
     },
   ];
 }
 
 function installButton(target) {
   const inner = `${brandIcon(target.id)}<span>${escapeHtml(target.label)}</span>`;
-  if (target.href) {
-    return `<a class="install-btn" href="${escapeHtml(target.href)}" title="${escapeHtml(target.hint)}">${inner}</a>`;
-  }
-  return `<button type="button" class="install-btn" data-copy="${escapeHtml(target.copy)}" title="${escapeHtml(target.hint)}">${inner}</button>`;
+  const title = escapeHtml(target.hint);
+  if (target.href) return `<a class="install-btn" href="${escapeHtml(target.href)}" title="${title}">${inner}</a>`;
+  return `<button type="button" class="install-btn" data-copy="${escapeHtml(target.copy)}" title="${title}">${inner}</button>`;
+}
+
+function installSection(endpoint) {
+  const targets = installTargets(endpoint);
+  const group = (name) => targets.filter((t) => t.group === name).map(installButton).join('');
+  return `<div class="install-group">
+        <span class="install-label">One click</span>
+        <div class="install-grid">${group('click')}</div>
+      </div>
+      <div class="install-group">
+        <span class="install-label">Copy a command or config</span>
+        <div class="install-grid">${group('copy')}</div>
+      </div>
+      <p class="install-status" id="install-status" role="status"></p>
+      <div class="endpoint">
+        <span class="endpoint-label">Or use the URL in any client</span>
+        <div class="copy-row">
+          <code>${escapeHtml(endpoint)}</code>
+          <button type="button" class="copy-btn" data-copy="${escapeHtml(endpoint)}">Copy</button>
+        </div>
+      </div>`;
 }
 
 export function agentsPage({ origin, canonical, assetVersion, stats }) {
   // The endpoint is the gateway once there is one. This page is the thing an
   // agent is pointed at, so it must name the address that actually works.
   const endpoint = config.mcpGatewayUrl || `${origin}/mcp`;
-  const authenticated = Boolean(config.mcpGatewayUrl);
-  const targets = installTargets(endpoint);
+  // Sign-in exists only where there is a gateway and a Supabase project to
+  // sign in to. A self-hosted copy has neither, and shows the buttons plainly.
+  const gated = Boolean(config.mcpGatewayUrl && config.supabaseUrl);
 
   const tools = TOOLS.map(
     ([name, line]) => `<li><code>${escapeHtml(name)}</code><span>${escapeHtml(line)}</span></li>`,
   ).join('');
+
+  const connect = gated
+    ? `<section class="install">
+      <div id="signed-out">
+        <a class="install-btn signin-btn" id="signin-link" href="/signin?next=%2Fmcp">
+          ${brandIcon('github')}<span>Sign in with GitHub to connect</span>
+        </a>
+        <p class="aside">Free. New accounts get 60 MCP calls an hour, and you'll see exactly what you
+          have left before you install anything.</p>
+        <p class="install-status" id="signin-status" role="status"></p>
+      </div>
+
+      <div id="signed-in" hidden>
+        <div class="account-panel">
+          <div class="account-head">
+            <span>Signed in as <strong id="acct-email"></strong> &middot; <span id="acct-tier"></span> tier</span>
+            <button type="button" class="copy-btn" id="acct-signout">Sign out</button>
+          </div>
+          <div class="budgets" id="acct-budgets"></div>
+        </div>
+
+        ${installSection(endpoint)}
+
+        <details class="key-option" id="keys">
+          <summary>No browser? Use an API key</summary>
+          <p>For CI or an agent that can't open a browser. A key draws on the same allowance as your
+             account; it is a second way in, not a second budget.</p>
+          <div class="key-create">
+            <input id="key-label" type="text" maxlength="80" placeholder="Label, e.g. ci runner">
+            <button type="button" class="copy-btn" id="key-create">Create key</button>
+          </div>
+          <pre class="ad-newkey" id="key-new" hidden></pre>
+          <ul class="key-list" id="key-list"></ul>
+          <pre><code>{
+  "mcpServers": {
+    "${SERVER_NAME}": {
+      "type": "http",
+      "url": "${escapeHtml(endpoint)}",
+      "headers": { "Authorization": "Bearer cvf_live_..." }
+    }
+  }
+}</code></pre>
+        </details>
+      </div>
+    </section>`
+    : `<section class="install">
+      ${installSection(endpoint)}
+      <p class="aside">No account, no API key. Any MCP client works — the endpoint is all it needs.</p>
+    </section>`;
 
   const body = `<article class="doc agents-page">
     <nav class="crumbs"><a href="/">Feed</a> <span>/</span> <span>For agents</span></nav>
@@ -95,38 +194,7 @@ export function agentsPage({ origin, canonical, assetVersion, stats }) {
     overnight, whether working exploit code exists, and which of your dependencies it hits.
     <strong>${stats?.withExploitSignal ?? 0}</strong> stored records carry a known exploit signal.</p>
 
-    <section class="install">
-      <div class="install-grid">${targets.map(installButton).join('')}</div>
-      <p class="install-status" id="install-status" role="status"></p>
-
-      <div class="endpoint">
-        <span class="endpoint-label">Or use the URL in any client</span>
-        <div class="copy-row">
-          <code>${escapeHtml(endpoint)}</code>
-          <button type="button" class="copy-btn" data-copy="${escapeHtml(endpoint)}">Copy</button>
-        </div>
-      </div>
-
-      ${
-        authenticated
-          ? `<p class="aside">Your client opens a browser on first use: sign in with GitHub and approve
-        it. New accounts get 60 calls an hour.</p>
-      <details class="key-option">
-        <summary>No browser? Use an API key</summary>
-        <p>For CI or a headless agent, send a key as a bearer token instead of signing in.</p>
-        <pre><code>{
-  "mcpServers": {
-    "${SERVER_NAME}": {
-      "type": "http",
-      "url": "${escapeHtml(endpoint)}",
-      "headers": { "Authorization": "Bearer cvf_live_..." }
-    }
-  }
-}</code></pre>
-      </details>`
-          : `<p class="aside">No account, no API key. Any MCP client works — the endpoint is all it needs.</p>`
-      }
-    </section>
+    ${connect}
 
     <section class="block">
       <h2>Six tools</h2>
@@ -145,23 +213,14 @@ export function agentsPage({ origin, canonical, assetVersion, stats }) {
     <a href="https://github.com/d0gra/CVEfeed" rel="noopener">Source on GitHub</a>.</p>
   </article>
 
+  ${gated ? sessionHead(config.supabaseUrl, assetVersion) : ''}
   <script>
   (function () {
-    var status = document.getElementById('install-status');
-    /* Values come from data attributes the server wrote; nothing here is
-       user-supplied, and text is set as text. */
-    function copy(text, button) {
-      var done = function () {
-        if (button.classList.contains('copy-btn')) {
-          button.textContent = 'Copied';
-          setTimeout(function () { button.textContent = 'Copy'; }, 1600);
-        }
-        if (status) status.textContent = 'Copied: ' + text;
-      };
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(done, function () { fallback(text); done(); });
-      } else { fallback(text); done(); }
-    }
+    var el = function (id) { return document.getElementById(id); };
+    var status = el('install-status');
+
+    /* Values come from data attributes the server wrote or from this account's
+       own API responses. Everything is set as text, never as markup. */
     function fallback(text) {
       var area = document.createElement('textarea');
       area.value = text;
@@ -173,18 +232,146 @@ export function agentsPage({ origin, canonical, assetVersion, stats }) {
       try { document.execCommand('copy'); } catch (e) { /* nothing more to try */ }
       document.body.removeChild(area);
     }
+    function copy(text, button) {
+      var done = function () {
+        if (button && button.classList.contains('copy-btn')) {
+          var before = button.textContent;
+          button.textContent = 'Copied';
+          setTimeout(function () { button.textContent = before; }, 1600);
+        }
+        if (status) status.textContent = 'Copied: ' + text.split('\\n')[0] + (text.indexOf('\\n') > -1 ? ' ...' : '');
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, function () { fallback(text); done(); });
+      } else { fallback(text); done(); }
+    }
     document.querySelectorAll('[data-copy]').forEach(function (button) {
       button.addEventListener('click', function () { copy(button.getAttribute('data-copy'), button); });
     });
+
+    var session = window.CvefeedSession;
+    if (!session || !el('signed-in')) return;
+
+    var LABELS = { calls: 'MCP calls', deps: 'Dependency checks', web: 'Web research' };
+
+    function api(path, init) {
+      init = init || {};
+      init.headers = Object.assign({ Authorization: 'Bearer ' + session.getToken() }, init.headers || {});
+      if (init.body) init.headers['Content-Type'] = 'application/json';
+      return fetch('/account/api' + path, init).then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (payload) {
+          return { ok: response.ok, status: response.status, payload: payload };
+        });
+      });
+    }
+
+    function minutesUntil(iso) {
+      var ms = Date.parse(iso) - Date.now();
+      return isFinite(ms) && ms > 0 ? Math.ceil(ms / 60000) : 0;
+    }
+
+    function renderBudgets(budgets) {
+      var host = el('acct-budgets');
+      host.textContent = '';
+      ['calls', 'deps', 'web'].forEach(function (name) {
+        var b = budgets[name];
+        if (!b) return;
+        var row = document.createElement('div');
+        row.className = 'budget';
+        var head = document.createElement('div');
+        head.className = 'budget-head';
+        var label = document.createElement('span');
+        label.textContent = LABELS[name];
+        var count = document.createElement('span');
+        count.textContent = b.remaining + ' of ' + b.limit + ' left this hour';
+        head.appendChild(label);
+        head.appendChild(count);
+        var bar = document.createElement('div');
+        bar.className = 'budget-bar';
+        var fill = document.createElement('span');
+        fill.style.width = Math.min(100, Math.round((b.used / Math.max(b.limit, 1)) * 100)) + '%';
+        bar.appendChild(fill);
+        row.appendChild(head);
+        row.appendChild(bar);
+        if (b.used > 0 && b.resetAt) {
+          var reset = document.createElement('span');
+          reset.className = 'budget-reset';
+          reset.textContent = 'Resets in ' + minutesUntil(b.resetAt) + ' min';
+          row.appendChild(reset);
+        }
+        host.appendChild(row);
+      });
+    }
+
+    function renderKeys(keys) {
+      var list = el('key-list');
+      list.textContent = '';
+      keys.forEach(function (k) {
+        var li = document.createElement('li');
+        var name = document.createElement('span');
+        name.textContent = k.key_prefix + '...  ' + k.label + (k.active ? '' : '  (revoked)');
+        li.appendChild(name);
+        if (k.active) {
+          var revoke = document.createElement('button');
+          revoke.type = 'button';
+          revoke.className = 'copy-btn';
+          revoke.textContent = 'Revoke';
+          revoke.addEventListener('click', function () {
+            revoke.disabled = true;
+            api('/keys/' + encodeURIComponent(k.id), { method: 'PATCH', body: JSON.stringify({ disabled: true }) })
+              .then(load);
+          });
+          li.appendChild(revoke);
+        }
+        list.appendChild(li);
+      });
+    }
+
+    function showSignedOut(message) {
+      el('signed-in').hidden = true;
+      el('signed-out').hidden = false;
+      el('signin-status').textContent = message || '';
+    }
+
+    function load() {
+      return api('/me').then(function (r) {
+        if (r.status === 401) { session.signOut(); showSignedOut('Your session has ended. Sign in again.'); return; }
+        if (!r.ok) { showSignedOut(r.payload.error || 'Your account could not be loaded.'); return; }
+        var me = r.payload;
+        el('acct-email').textContent = me.email || 'your GitHub account';
+        el('acct-tier').textContent = me.tier;
+        renderBudgets(me.budgets || {});
+        renderKeys(me.keys || []);
+        el('signed-out').hidden = true;
+        el('signed-in').hidden = false;
+      }).catch(function () { showSignedOut('Could not reach your account.'); });
+    }
+
+    el('acct-signout').addEventListener('click', function () { session.signOut(); showSignedOut(''); });
+    el('signin-link').addEventListener('click', function (event) { event.preventDefault(); session.signIn('/mcp'); });
+    el('key-create').addEventListener('click', function () {
+      var button = el('key-create');
+      button.disabled = true;
+      api('/keys', { method: 'POST', body: JSON.stringify({ label: el('key-label').value }) }).then(function (r) {
+        button.disabled = false;
+        var box = el('key-new');
+        box.hidden = false;
+        /* Shown once. Nothing stores the plaintext, here or in Postgres. */
+        box.textContent = r.ok ? r.payload.key + '\\n\\n' + r.payload.note : (r.payload.error || 'The key could not be created.');
+        if (r.ok) { el('key-label').value = ''; load(); }
+      });
+    });
+
+    if (session.getToken()) load();
   })();
   </script>`;
 
   return layout({
     title: 'Connect your agent | CVE Feed',
     description:
-      'Add CVE Feed to VS Code, Cursor, Claude or OpenCode: live vulnerability and exploit ' +
-      'intelligence over MCP, plus a dependency check by exact version. ' +
-      (authenticated ? 'Free to use; sign in with GitHub.' : 'No account, no API key.'),
+      'Add CVE Feed to VS Code, Cursor, Claude, Codex, OpenClaw, Hermes and more: live ' +
+      'vulnerability and exploit intelligence over MCP, plus a dependency check by exact version. ' +
+      (gated ? 'Free; sign in with GitHub.' : 'No account, no API key.'),
     canonical,
     body,
     current: '/mcp',

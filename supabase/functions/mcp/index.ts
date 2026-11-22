@@ -88,10 +88,12 @@ const ERROR_TTL = '1 minute';
 // row for the person who edits them.
 const ADMIN_RATE_PER_HOUR = 5000;
 const ADMIN_DEPS_PER_HOUR = 500;
+const ADMIN_WEB_PER_HOUR = 500;
 // Used only when the quota lookup itself fails. Denying on a database hiccup
 // would be worse than briefly serving someone at the lowest tier.
 const FALLBACK_RATE_PER_HOUR = 60;
 const FALLBACK_DEPS_PER_HOUR = 10;
+const FALLBACK_WEB_PER_HOUR = 5;
 
 /* ---------- small helpers ---------- */
 
@@ -227,7 +229,25 @@ let manifest: Manifest | null = null;
 let manifestFetchedAt = 0;
 let validators = new Map<string, ValidateFunction>();
 
-function compile(tools: Tool[]) {
+/**
+ * Tools the gateway answers itself, from Postgres or its own upstreams, with
+ * no call to Hostinger. They are listed beside the manifest's tools and
+ * validated by the same Ajv instance, so a client cannot tell them apart.
+ */
+const NATIVE_TOOLS: Tool[] = [
+  {
+    name: 'account',
+    description:
+      'Who you are signed in as, your tier, and how much of each hourly budget you have left: ' +
+      'MCP calls, dependency checks and web research, with when each resets. Free - calling it ' +
+      'does not spend quota. Check it before a large audit rather than finding the limit mid-way.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+];
+const NATIVE_NAMES = new Set(NATIVE_TOOLS.map((tool) => tool.name));
+
+function compile(manifestTools: Tool[]) {
+  const tools = [...manifestTools, ...NATIVE_TOOLS];
   const next = new Map<string, ValidateFunction>();
   for (const tool of tools) {
     try {
@@ -292,8 +312,20 @@ type Principal = {
   // on a budget shared with the whole host, so the expensive tool is metered
   // separately and far more tightly.
   depsLimit: number;
+  // Web research spends the search provider's allowance, so it is the
+  // smallest budget of the three.
+  webLimit: number;
   tier?: string;
 };
+
+type TierRow = { tier: string; rate_per_hour: number; deps_per_hour: number; web_per_hour?: number };
+
+/** One account's limits, provisioning the new-account tier on first sight. */
+async function userTier(db: SupabaseClient, userId: string, email: string | null): Promise<TierRow | undefined> {
+  const { data, error } = await db.rpc('mcp_user_quota', { p_user_id: userId, p_email: email });
+  if (error) console.error(`[gateway] quota lookup failed for ${userId}: ${error.message}`);
+  return (Array.isArray(data) ? data[0] : data) as TierRow | undefined;
+}
 
 async function authenticate(
   db: SupabaseClient,
@@ -311,17 +343,36 @@ async function authenticate(
       return { problem: 'The key could not be checked. Try again shortly.' };
     }
     const row = (Array.isArray(data) ? data[0] : data) as
-      | { principal: string; rate_per_hour: number }
+      | { principal: string; rate_per_hour: number; owner?: string | null }
       | undefined;
     if (!row) return { problem: 'That key is not valid, or has been revoked.' };
+
+    // A key someone minted for themselves is a second way in to their own
+    // allowance, never a second allowance: it is metered as its owner, on
+    // the owner's tier. Otherwise minting three keys would triple a quota.
+    if (row.owner) {
+      const tier = await userTier(db, row.owner, null);
+      return {
+        principal: {
+          id: `user:${row.owner}`,
+          kind: 'key',
+          limit: tier?.rate_per_hour ?? FALLBACK_RATE_PER_HOUR,
+          depsLimit: tier?.deps_per_hour ?? FALLBACK_DEPS_PER_HOUR,
+          webLimit: tier?.web_per_hour ?? FALLBACK_WEB_PER_HOUR,
+          tier: tier?.tier ?? 'new',
+        },
+      };
+    }
+
+    // An unowned key - one an administrator issued for CI - carries its own
+    // limit. The other two budgets follow the same ratios the tiers use.
     return {
       principal: {
         id: row.principal,
         kind: 'key',
         limit: row.rate_per_hour,
-        // A tenth of the general allowance, matching the ratio the account
-        // tiers use, so a key does not need a second column to carry it.
         depsLimit: Math.max(Math.round(row.rate_per_hour / 10), 1),
+        webLimit: Math.max(Math.round(row.rate_per_hour / 100), 1),
         tier: 'key',
       },
     };
@@ -345,6 +396,7 @@ async function authenticate(
           kind: 'user',
           limit: ADMIN_RATE_PER_HOUR,
           depsLimit: ADMIN_DEPS_PER_HOUR,
+          webLimit: ADMIN_WEB_PER_HOUR,
           tier: 'admin',
         },
       };
@@ -353,18 +405,14 @@ async function authenticate(
     // Provisions the new-account tier on first sight, so a GitHub sign-in is
     // all someone needs to be known here - at a limit, not at ours.
     const email = typeof payload.email === 'string' ? payload.email : null;
-    const { data, error } = await db.rpc('mcp_user_quota', { p_user_id: subject, p_email: email });
-    const tier = (Array.isArray(data) ? data[0] : data) as
-      | { tier: string; rate_per_hour: number; deps_per_hour: number }
-      | undefined;
-    if (error) console.error(`[gateway] quota lookup failed for ${subject}: ${error.message}`);
-
+    const tier = await userTier(db, subject, email);
     return {
       principal: {
         id: `user:${subject}`,
         kind: 'user',
         limit: tier?.rate_per_hour ?? FALLBACK_RATE_PER_HOUR,
         depsLimit: tier?.deps_per_hour ?? FALLBACK_DEPS_PER_HOUR,
+        webLimit: tier?.web_per_hour ?? FALLBACK_WEB_PER_HOUR,
         tier: tier?.tier ?? 'new',
       },
     };
@@ -482,6 +530,69 @@ async function runTool(
   return result;
 }
 
+/* ---------- native tools ---------- */
+
+async function runNativeTool(
+  db: SupabaseClient,
+  principal: Principal,
+  name: string,
+  args: Record<string, unknown>,
+  log: LogRow,
+): Promise<unknown> {
+  const validate = validators.get(name);
+  if (validate && !validate(args)) {
+    log.p_outcome = 'validation_error';
+    log.p_error_code = 'schema';
+    return toolFailure(`Those arguments do not match the schema for ${name}. Call tools/list for its shape.`);
+  }
+
+  if (name === 'account') {
+    const { data, error } = await db.rpc('mcp_quota_status', { p_principal: principal.id });
+    if (error) {
+      log.p_outcome = 'upstream_error';
+      log.p_error_code = 'quota_status';
+      return toolFailure(`Your account could not be read: ${error.message}`);
+    }
+    const rows = (Array.isArray(data) ? data : []) as { bucket: string; used: number; reset_at: string }[];
+    const limits: Record<string, number> = {
+      calls: principal.limit,
+      deps: principal.depsLimit,
+      web: principal.webLimit,
+    };
+    const budgets = Object.fromEntries(
+      ['calls', 'deps', 'web'].map((bucket) => {
+        const row = rows.find((r) => r.bucket === bucket);
+        const used = row?.used ?? 0;
+        return [bucket, { limit: limits[bucket], used, remaining: Math.max(limits[bucket] - used, 0), resetAt: row?.reset_at ?? null }];
+      }),
+    );
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(
+            {
+              principal: principal.id,
+              signedInWith: principal.kind === 'key' ? 'api key' : 'oauth',
+              tier: principal.tier,
+              budgets,
+              note:
+                'Budgets reset hourly. Dependency checks and web research are metered separately ' +
+                'because each one spends a third-party service.',
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  }
+
+  log.p_outcome = 'validation_error';
+  log.p_error_code = 'unknown_tool';
+  return toolFailure(`Unknown tool: ${name}`);
+}
+
 /* ---------- JSON-RPC ---------- */
 
 async function handleMessage(
@@ -515,7 +626,10 @@ async function handleMessage(
 
   // Quota is charged per message. A notification asks for no work worth
   // metering, and charging the handshake would break clients under load.
-  if (!isNotification && method !== 'initialize' && method !== 'ping') {
+  let quota: { limit: number; remaining: number; resetAt: string } | null = null;
+  const toolName = method === 'tools/call' ? String(params?.name ?? '') : '';
+  // Checking how much quota you have left must not spend any of it.
+  if (!isNotification && method !== 'initialize' && method !== 'ping' && toolName !== 'account') {
     const { data, error } = await db.rpc('mcp_consume_quota', {
       p_principal: principal.id,
       p_limit: principal.limit,
@@ -525,6 +639,7 @@ async function handleMessage(
       | { allowed: boolean; remaining: number; reset_at: string }
       | undefined;
     if (error) console.error(`[gateway] quota check failed: ${error.message}`);
+    if (verdict) quota = { limit: principal.limit, remaining: verdict.remaining, resetAt: verdict.reset_at };
     if (verdict && !verdict.allowed) {
       const retryAfter = Math.max(1, Math.round((Date.parse(verdict.reset_at) - Date.now()) / 1000));
       log.p_outcome = 'quota';
@@ -591,13 +706,13 @@ async function handleMessage(
         log.p_error_code = 'no_manifest';
         return finish(rpcError(id, ERR.internal, 'The tool list is temporarily unavailable.'));
       }
-      return finish(rpcResult(id, { tools: live.tools }));
+      return finish(rpcResult(id, { tools: [...live.tools, ...NATIVE_TOOLS] }));
     }
 
     case 'tools/call': {
       const live = await getManifest(db);
       const name = String(params?.name ?? '');
-      if (!live?.tools.some((tool) => tool.name === name)) {
+      if (!NATIVE_NAMES.has(name) && !live?.tools.some((tool) => tool.name === name)) {
         log.p_outcome = 'validation_error';
         log.p_error_code = 'unknown_tool';
         return finish(rpcError(id, ERR.params, `Unknown tool: ${name || '(none)'}`));
@@ -608,7 +723,14 @@ async function handleMessage(
         log.p_error_code = 'bad_arguments';
         return finish(rpcError(id, ERR.params, '`arguments` must be an object.'));
       }
-      return finish(rpcResult(id, await runTool(db, name, args, log)));
+      const result = NATIVE_NAMES.has(name)
+        ? await runNativeTool(db, principal, name, args, log)
+        : await runTool(db, name, args, log);
+      // A new object rather than a mutation: runTool hands the same result to
+      // the cache in the background, and quota must never be cached with it.
+      return finish(
+        rpcResult(id, quota ? { ...(result as object), _meta: { 'cvefeed/quota': quota } } : result),
+      );
     }
 
     default:

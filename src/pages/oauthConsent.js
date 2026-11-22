@@ -8,7 +8,7 @@
  *
  * No third-party script. The three calls it needs are plain REST:
  *
- *   POST {auth}/otp                                   send a magic link
+ *   GET  {auth}/authorize?provider=github             sign in (via session.js)
  *   GET  {auth}/oauth/authorizations/{id}             what is being asked for
  *   POST {auth}/oauth/authorizations/{id}/consent     { action: approve|deny }
  *
@@ -22,8 +22,10 @@
  * elsewhere in this codebase, for the same reason.
  */
 import { layout } from './layout.js';
+import { sessionHead } from './signin.js';
+import { brandIcon } from './brandIcons.js';
 
-export function oauthConsentPage({ canonical, assetVersion, supabaseUrl, publishableKey, allowSignup }) {
+export function oauthConsentPage({ canonical, assetVersion, supabaseUrl, publishableKey }) {
   const configured = Boolean(supabaseUrl && publishableKey);
 
   const body = `<article class="doc">
@@ -37,13 +39,7 @@ export function oauthConsentPage({ canonical, assetVersion, supabaseUrl, publish
 
         <div id="oc-signin" hidden>
           <p>Sign in to continue. No password, and nothing to fill in.</p>
-          <button type="button" id="oc-github" class="poc-btn primary">Continue with GitHub</button>
-          <p class="oc-or">Already have an account by email? Sign in with a link instead.</p>
-          <div class="mod-auth">
-            <label for="oc-email">Email</label>
-            <input id="oc-email" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com">
-            <button type="button" id="oc-send" class="poc-btn">Email me a link</button>
-          </div>
+          <button type="button" id="oc-github" class="install-btn signin-btn">${brandIcon('github')}<span>Continue with GitHub</span></button>
         </div>
 
         <div id="oc-request" hidden>
@@ -73,13 +69,11 @@ export function oauthConsentPage({ canonical, assetVersion, supabaseUrl, publish
 
   ${
     configured
-      ? `<script>
+      ? `${sessionHead(supabaseUrl, assetVersion)}
+  <script>
   (function () {
     var AUTH = ${JSON.stringify(`${supabaseUrl}/auth/v1`)};
     var KEY = ${JSON.stringify(publishableKey)};
-    var ALLOW_SIGNUP = ${allowSignup ? 'true' : 'false'};
-    var SESSION_KEY = 'cvefeed.sb.token';
-
     var el = function (id) { return document.getElementById(id); };
     var status = el('oc-status');
     var say = function (message) { if (status) status.textContent = message || ''; };
@@ -90,22 +84,10 @@ export function oauthConsentPage({ canonical, assetVersion, supabaseUrl, publish
     var params = new URLSearchParams(window.location.search);
     var authorizationId = params.get('authorization_id') || '';
 
-    /* The magic link returns the session in the fragment. Take it, keep it for
-       this tab only, and strip it from the address bar so it is not left in
-       history or sent in a Referer. */
-    function claimTokenFromHash() {
-      if (!window.location.hash) return null;
-      var hash = new URLSearchParams(window.location.hash.slice(1));
-      var token = hash.get('access_token');
-      if (!token) return null;
-      try { sessionStorage.setItem(SESSION_KEY, token); } catch (e) { /* private mode */ }
-      history.replaceState(null, '', window.location.pathname + window.location.search);
-      return token;
-    }
-
-    function token() {
-      try { return sessionStorage.getItem(SESSION_KEY); } catch (e) { return null; }
-    }
+    /* session.js has already claimed any session GitHub sent back in the
+       fragment, and stripped it from the address bar. */
+    var session = window.CvefeedSession;
+    function token() { return session.getToken(); }
 
     function headers(extra) {
       var base = { apikey: KEY, Authorization: 'Bearer ' + token() };
@@ -113,39 +95,8 @@ export function oauthConsentPage({ canonical, assetVersion, supabaseUrl, publish
       return base;
     }
 
-    /* A full-page redirect, not a fetch: the provider dance has to happen in
-       the address bar. It returns to this same URL with the session in the
-       fragment, which claimTokenFromHash already knows what to do with. */
     function signInWithGitHub() {
-      var back = window.location.origin + window.location.pathname +
-        '?authorization_id=' + encodeURIComponent(authorizationId);
-      window.location.assign(AUTH + '/authorize?provider=github&redirect_to=' + encodeURIComponent(back));
-    }
-
-    function sendLink() {
-      var email = (el('oc-email').value || '').trim();
-      if (!email) { say('Enter your email address first.'); return; }
-      el('oc-send').disabled = true;
-      say('Sending...');
-      /* redirect_to carries authorization_id back, so the link returns to this
-         same request rather than a bare consent page with nothing to consent to. */
-      var back = window.location.origin + window.location.pathname + '?authorization_id=' + encodeURIComponent(authorizationId);
-      fetch(AUTH + '/otp?redirect_to=' + encodeURIComponent(back), {
-        method: 'POST',
-        headers: { apikey: KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email, create_user: ALLOW_SIGNUP })
-      }).then(function (response) {
-        el('oc-send').disabled = false;
-        if (!response.ok) {
-          return response.json().catch(function () { return {}; }).then(function (payload) {
-            say(payload.msg || payload.error_description || 'That did not work. Check the address and try again.');
-          });
-        }
-        say('Check your email for a link, then come back here.');
-      }).catch(function () {
-        el('oc-send').disabled = false;
-        say('Could not reach the sign-in service.');
-      });
+      session.signIn(window.location.pathname + '?authorization_id=' + encodeURIComponent(authorizationId));
     }
 
     function scopeList(details) {
@@ -197,9 +148,9 @@ export function oauthConsentPage({ canonical, assetVersion, supabaseUrl, publish
       fetch(AUTH + '/oauth/authorizations/' + encodeURIComponent(authorizationId), { headers: headers() })
         .then(function (response) {
           if (response.status === 401) {
-            try { sessionStorage.removeItem(SESSION_KEY); } catch (e) { /* ignore */ }
+            session.signOut();
             el('oc-signin').hidden = false;
-            say('That sign-in has expired. Request a new link.');
+            say('That sign-in has expired. Sign in again.');
             return null;
           }
           return response.json().catch(function () { return {}; }).then(function (payload) {
@@ -224,15 +175,11 @@ export function oauthConsentPage({ canonical, assetVersion, supabaseUrl, publish
         .catch(function () { say('Could not reach the authorization server.'); });
     }
 
-    claimTokenFromHash();
-
     if (!authorizationId) {
       say('This page is the last step of an application sign-in. Start from the application and you will be sent here.');
       return;
     }
     el('oc-github').addEventListener('click', signInWithGitHub);
-    el('oc-send').addEventListener('click', sendLink);
-    el('oc-email').addEventListener('keydown', function (event) { if (event.key === 'Enter') sendLink(); });
     el('oc-approve').addEventListener('click', function () { decide('approve'); });
     el('oc-deny').addEventListener('click', function () { decide('deny'); });
 

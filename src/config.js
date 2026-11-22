@@ -134,11 +134,6 @@ export const config = {
   // answering indefinitely with a deprecation notice attached, because
   // cutting agents off on a date nobody chose is worse than a long warning.
   mcpLegacyUntil: process.env.MCP_LEGACY_UNTIL || '',
-  // Whether a magic link may create an account that does not exist yet.
-  // Off by default: with OAuth dynamic registration enabled, leaving this on
-  // would let anyone who can reach the consent page mint themselves an
-  // account and a quota on a security tool. Turn it on deliberately.
-  oauthAllowSignup: bool(process.env.OAUTH_ALLOW_SIGNUP, false),
   // How far a signed request's timestamp may sit from ours. The window is
   // the whole of the replay protection - there is no nonce store - which is
   // affordable because these calls only read.

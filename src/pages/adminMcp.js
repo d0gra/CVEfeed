@@ -17,6 +17,8 @@
  * textContent.
  */
 import { layout } from './layout.js';
+import { sessionHead } from './signin.js';
+import { brandIcon } from './brandIcons.js';
 
 export function adminMcpPage({ canonical, assetVersion, supabaseUrl, publishableKey }) {
   const configured = Boolean(supabaseUrl && publishableKey);
@@ -29,13 +31,7 @@ export function adminMcpPage({ canonical, assetVersion, supabaseUrl, publishable
       configured
         ? `<div id="ad-signin" hidden>
           <p class="lede">Sign in to read the gateway's records.</p>
-          <button type="button" id="ad-github" class="poc-btn primary">Continue with GitHub</button>
-          <p class="oc-or">Or sign in by email link.</p>
-          <div class="mod-auth">
-            <label for="ad-email">Email</label>
-            <input id="ad-email" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com">
-            <button type="button" id="ad-send" class="poc-btn">Email me a link</button>
-          </div>
+          <button type="button" id="ad-github" class="install-btn signin-btn">${brandIcon('github')}<span>Continue with GitHub</span></button>
         </div>
 
         <div id="ad-main" hidden>
@@ -96,28 +92,17 @@ export function adminMcpPage({ canonical, assetVersion, supabaseUrl, publishable
 
   ${
     configured
-      ? `<script>
+      ? `${sessionHead(supabaseUrl, assetVersion)}
+  <script>
   (function () {
-    var AUTH = ${JSON.stringify(`${supabaseUrl}/auth/v1`)};
-    var KEY = ${JSON.stringify(publishableKey)};
-    var SESSION_KEY = 'cvefeed.sb.token';
+    var session = window.CvefeedSession;
 
     var el = function (id) { return document.getElementById(id); };
     var say = function (m) { el('ad-status').textContent = m || ''; };
 
-    function token() { try { return sessionStorage.getItem(SESSION_KEY); } catch (e) { return null; } }
-    function forget() { try { sessionStorage.removeItem(SESSION_KEY); } catch (e) { /* ignore */ } }
-
-    /* The magic link returns the session in the fragment; take it and strip it
-       so it is not left in history or leaked in a Referer. */
-    (function claim() {
-      if (!window.location.hash) return;
-      var hash = new URLSearchParams(window.location.hash.slice(1));
-      var t = hash.get('access_token');
-      if (!t) return;
-      try { sessionStorage.setItem(SESSION_KEY, t); } catch (e) { /* private mode */ }
-      history.replaceState(null, '', window.location.pathname);
-    })();
+    /* session.js has already claimed any session GitHub sent back. */
+    function token() { return session.getToken(); }
+    function forget() { session.signOut(); }
 
     function api(path, options) {
       var init = options || {};
@@ -136,24 +121,6 @@ export function adminMcpPage({ canonical, assetVersion, supabaseUrl, publishable
       el('ad-main').hidden = true;
       el('ad-signin').hidden = false;
       say(message || '');
-    }
-
-    function sendLink() {
-      var email = (el('ad-email').value || '').trim();
-      if (!email) { say('Enter your email address first.'); return; }
-      el('ad-send').disabled = true;
-      say('Sending...');
-      fetch(AUTH + '/otp?redirect_to=' + encodeURIComponent(window.location.origin + window.location.pathname), {
-        method: 'POST',
-        headers: { apikey: KEY, 'Content-Type': 'application/json' },
-        /* Never create an account from here: an admin already exists, and a
-           dashboard is not a sign-up form. */
-        body: JSON.stringify({ email: email, create_user: false })
-      }).then(function (response) {
-        el('ad-send').disabled = false;
-        if (!response.ok) { say('That did not work. Check the address.'); return; }
-        say('Check your email, then come back to this page.');
-      }).catch(function () { el('ad-send').disabled = false; say('Could not reach the sign-in service.'); });
     }
 
     /* ---------- rendering ---------- */
@@ -354,12 +321,7 @@ export function adminMcpPage({ canonical, assetVersion, supabaseUrl, publishable
       });
     }
 
-    el('ad-github').addEventListener('click', function () {
-      window.location.assign(AUTH + '/authorize?provider=github&redirect_to=' +
-        encodeURIComponent(window.location.origin + window.location.pathname));
-    });
-    el('ad-send').addEventListener('click', sendLink);
-    el('ad-email').addEventListener('keydown', function (e) { if (e.key === 'Enter') sendLink(); });
+    el('ad-github').addEventListener('click', function () { session.signIn('/admin/mcp'); });
     el('ad-issue').addEventListener('click', function () {
       el('ad-issue').disabled = true;
       api('/keys', {

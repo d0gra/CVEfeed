@@ -16,6 +16,7 @@ import { hubNames, listIdsForSitemap, recordsForName } from '../store/cveStore.j
 import { approvedPocsForCve } from '../store/pocStore.js';
 import { issueChallenge, turnstileSiteKey, usingTurnstile } from '../lib/captcha.js';
 import { originFor } from '../pages/layout.js';
+import { signinPage } from '../pages/signin.js';
 import { cvePage, notFoundPage } from '../pages/cve.js';
 import { agentsPage, depsPage, earnPage, exploitedPage, hubIndexPage, hubPage, moderatePage, oauthConsentPage, slugFor, stackCategoryPage, stackIndexPage, termsPage } from '../pages/index.js';
 
@@ -263,6 +264,17 @@ router.get('/terms', (req, res) => {
  * no-store because the page carries a live authorization request, and noindex
  * because a consent screen in a search result is a phishing aid.
  */
+/** GitHub sign-in. no-store because it carries a live redirect target. */
+router.get('/signin', (req, res) => {
+  const origin = originFor(req);
+  res
+    .status(200)
+    .type('html')
+    .set('Cache-Control', 'no-store')
+    .set('X-Robots-Tag', 'noindex')
+    .send(signinPage({ canonical: `${origin}/signin`, assetVersion, supabaseUrl: config.supabaseUrl }));
+});
+
 router.get('/oauth/consent', (req, res) => {
   const origin = originFor(req);
   res
@@ -276,7 +288,6 @@ router.get('/oauth/consent', (req, res) => {
         assetVersion,
         supabaseUrl: config.supabaseUrl,
         publishableKey: config.supabasePublishableKey,
-        allowSignup: config.oauthAllowSignup,
       }),
     );
 });
@@ -319,6 +330,7 @@ router.get('/robots.txt', (req, res) => {
         'Disallow: /*?',
         'Disallow: /moderate',
         'Disallow: /oauth/',
+        'Disallow: /signin',
         'Disallow: /admin/',
         'Disallow: /api/',
         '',
