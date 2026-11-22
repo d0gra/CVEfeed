@@ -40,6 +40,9 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
 const SERVICE_KEY =
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? Deno.env.get('SUPABASE_SECRET_KEY') ?? '';
 const UPSTREAM = (Deno.env.get('HOSTINGER_TOOL_URL') ?? '').replace(/\/+$/, '');
+// Where withOAuthProtectedResource serves the discovery document - the same
+// address its own 401 header names, checked against the live endpoint.
+const RESOURCE_METADATA_URL = `${SUPABASE_URL}/functions/v1/mcp/oauth-protected-resource`;
 const GATEWAY_SECRET = Deno.env.get('GATEWAY_SECRET') ?? '';
 // Server-side only. The client never learns which search provider answers.
 const LANGSEARCH_API_KEY = Deno.env.get('LANGSEARCH_API_KEY') ?? '';
@@ -336,9 +339,15 @@ async function userTier(db: SupabaseClient, userId: string, email: string | null
 async function authenticate(
   db: SupabaseClient,
   req: Request,
-): Promise<{ principal?: Principal; problem?: string }> {
+): Promise<{ principal?: Principal; problem?: string; rejected?: boolean }> {
   const match = /^Bearer\s+(.+)$/i.exec((req.headers.get('authorization') ?? '').trim());
-  if (!match) return { problem: 'Authentication required. Present an API key as a bearer token.' };
+  if (!match) {
+    return {
+      problem:
+        'Sign-in required. MCP clients that support OAuth open a browser to sign in with GitHub; ' +
+        'others can use an API key from https://cve.zerocrew.in/mcp as a bearer token.',
+    };
+  }
 
   const token = match[1].trim();
 
@@ -351,7 +360,7 @@ async function authenticate(
     const row = (Array.isArray(data) ? data[0] : data) as
       | { principal: string; rate_per_hour: number; owner?: string | null }
       | undefined;
-    if (!row) return { problem: 'That key is not valid, or has been revoked.' };
+    if (!row) return { problem: 'That key is not valid, or has been revoked.', rejected: true };
 
     // A key someone minted for themselves is a second way in to their own
     // allowance, never a second allowance: it is metered as its owner, on
@@ -423,7 +432,10 @@ async function authenticate(
       },
     };
   } catch (error) {
-    return { problem: `That token was not accepted: ${(error as Error).message}` };
+    // `rejected` marks a token that was presented and refused - usually one
+    // that expired - so the 401 can say invalid_token and the client refreshes
+    // it, instead of treating this as a server it has never signed in to.
+    return { problem: `That token was not accepted: ${(error as Error).message}`, rejected: true };
   }
 }
 
@@ -917,7 +929,7 @@ const handler = async (req: Request): Promise<Response> => {
   const client = req.headers.get('user-agent');
   const ipHash = forwarded ? (await sha256(`${GATEWAY_SECRET}:${forwarded}`)).slice(0, 16) : null;
 
-  const { principal, problem } = await authenticate(db, req);
+  const { principal, problem, rejected } = await authenticate(db, req);
   if (!principal) {
     background(
       db
@@ -931,13 +943,20 @@ const handler = async (req: Request): Promise<Response> => {
         })
         .then(),
     );
-    // Deliberately no WWW-Authenticate of our own. withOAuthProtectedResource
-    // adds one carrying resource_metadata="...", which is the only thing that
-    // tells a client where the discovery document is - and setting our own
-    // suppresses it, leaving an OAuth-capable client with a challenge it
-    // cannot act on. Verified against a probe: a 401 carrying a header of ours
-    // came back with no pointer; with no header of ours, the pointer is there.
-    return respond(401, rpcError(null, ERR.request, problem ?? 'Authentication required.'));
+    // With no token at all, no WWW-Authenticate of our own: withOAuthProtectedResource
+    // adds one carrying resource_metadata="...", the only thing that tells a
+    // client where the discovery document is. Setting our own suppresses it
+    // (verified against a probe). A refused token - usually an expired one -
+    // does get our own, with RFC 6750's invalid_token, which is what tells a
+    // client to refresh rather than start over; so it carries the pointer too.
+    const challenge: Record<string, string> = rejected
+      ? {
+          'WWW-Authenticate':
+            'Bearer error="invalid_token", error_description="The access token is expired or invalid.", ' +
+            `resource_metadata="${RESOURCE_METADATA_URL}"`,
+        }
+      : {};
+    return respond(401, rpcError(null, ERR.request, problem ?? 'Authentication required.'), challenge);
   }
 
   const logs: LogRow[] = [];

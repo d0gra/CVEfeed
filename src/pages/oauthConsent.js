@@ -99,6 +99,38 @@ export function oauthConsentPage({ canonical, assetVersion, supabaseUrl, publish
       session.signIn(window.location.pathname + '?authorization_id=' + encodeURIComponent(authorizationId));
     }
 
+    /* Someone who reached this page came from an application's sign-in and
+       has nothing to decide until they are signed in, so the page sends them
+       to GitHub itself rather than waiting for a click. Once per request: a
+       refused or failed GitHub sign-in comes back here with an error, and must
+       land on the button, not loop. */
+    var TRIED = 'cvefeed.oc.tried';
+    function autoSignIn() {
+      var failed = /(^|[#&])error=/.test(window.location.hash);
+      var tried = false;
+      try { tried = sessionStorage.getItem(TRIED) === authorizationId; } catch (e) { tried = true; }
+      el('oc-signin').hidden = false;
+      if (failed) {
+        var hash = new URLSearchParams(window.location.hash.slice(1));
+        say('GitHub sign-in did not complete: ' + (hash.get('error_description') || hash.get('error')) + '. Try again.');
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+        return;
+      }
+      if (tried) { say(''); return; }
+      try { sessionStorage.setItem(TRIED, authorizationId); } catch (e) { /* the button still works */ }
+      say('Sending you to GitHub to sign in...');
+      signInWithGitHub();
+    }
+
+    function leaving(target) {
+      el('oc-request').hidden = true;
+      el('oc-signin').hidden = true;
+      /* A loopback or custom-scheme redirect can leave this tab where it is,
+         so say plainly that the work here is done. */
+      say('Done. Returning you to the application - if nothing happens, switch back to it; this tab can be closed.');
+      window.location.assign(target);
+    }
+
     function scopeList(details) {
       var raw = details.scope || details.scopes || '';
       var parts = Array.isArray(raw) ? raw : String(raw).split(' ');
@@ -129,7 +161,8 @@ export function oauthConsentPage({ canonical, assetVersion, supabaseUrl, publish
       }).then(function (response) {
         return response.json().catch(function () { return {}; }).then(function (payload) {
           if (response.ok && payload.redirect_url) {
-            window.location.assign(payload.redirect_url);
+            if (action === 'approve') leaving(payload.redirect_url);
+            else window.location.assign(payload.redirect_url);
             return;
           }
           el('oc-approve').disabled = false;
@@ -149,8 +182,7 @@ export function oauthConsentPage({ canonical, assetVersion, supabaseUrl, publish
         .then(function (response) {
           if (response.status === 401) {
             session.signOut();
-            el('oc-signin').hidden = false;
-            say('That sign-in has expired. Sign in again.');
+            autoSignIn();
             return null;
           }
           return response.json().catch(function () { return {}; }).then(function (payload) {
@@ -162,7 +194,7 @@ export function oauthConsentPage({ canonical, assetVersion, supabaseUrl, publish
           if (!details) return;
           /* Only a redirect_url means consent was already given for this client. */
           if (details.redirect_url && !details.client && !details.scope && !details.scopes) {
-            window.location.assign(details.redirect_url);
+            leaving(details.redirect_url);
             return;
           }
           put('oc-client', clientName(details));
@@ -184,7 +216,7 @@ export function oauthConsentPage({ canonical, assetVersion, supabaseUrl, publish
     el('oc-deny').addEventListener('click', function () { decide('deny'); });
 
     if (token()) loadRequest();
-    else { el('oc-signin').hidden = false; say(''); }
+    else autoSignIn();
   })();
   </script>`
       : ''

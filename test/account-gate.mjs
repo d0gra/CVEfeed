@@ -193,6 +193,7 @@ let aliceKey;
     window: { location: { hash: '', origin: 'https://cve.zerocrew.in', pathname: '/mcp', search: '' } },
     document: { querySelector: () => null },
     sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     history: { replaceState() {} },
     URLSearchParams,
   };
@@ -201,6 +202,42 @@ let aliceKey;
   check('?next= cannot leave the site (//host)', safeNext('//evil.example/x') === '/mcp');
   check('?next= cannot leave the site (absolute URL)', safeNext('https://evil.example/') === '/mcp');
   check('?next= keeps a same-site path', safeNext('/admin/mcp') === '/admin/mcp');
+}
+
+/* ---------- one sign-in serves every tab ---------- */
+
+{
+  // An MCP client opens the consent page in a fresh tab every time. With the
+  // session kept per tab, that was a GitHub round trip on every authorization.
+  const store = () => {
+    const m = new Map();
+    return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k), m };
+  };
+  const shared = store();
+  const tab = (hash, own = store()) => {
+    const sandbox = {
+      window: { location: { hash, origin: 'https://cve.zerocrew.in', pathname: '/oauth/consent', search: '?authorization_id=x' } },
+      document: { querySelector: () => null },
+      sessionStorage: own,
+      localStorage: shared,
+      history: { replaceState() {} },
+      URLSearchParams,
+    };
+    vm.runInNewContext(readFileSync(new URL('../public/assets/session.js', import.meta.url), 'utf8'), sandbox);
+    return sandbox.window.CvefeedSession;
+  };
+  tab('#access_token=tok-1&expires_in=3600');
+  check('a new tab is already signed in', tab('').getToken() === 'tok-1');
+  tab('').signOut();
+  check('signing out clears it for every tab', tab('').getToken() === null);
+
+  const old = store();
+  old.setItem('cvefeed.sb.token', JSON.stringify({ token: 'tok-old', expiresAt: Date.now() + 600000 }));
+  check('a tab signed in before the change keeps its session', tab('', old).getToken() === 'tok-old');
+  check('...and it moves to shared storage', shared.getItem('cvefeed.sb.token') !== null && old.getItem('cvefeed.sb.token') === null);
+
+  shared.setItem('cvefeed.sb.token', JSON.stringify({ token: 'tok-dead', expiresAt: Date.now() - 1000 }));
+  check('an expired token is not used', tab('').getToken() === null);
 }
 
 server.close();

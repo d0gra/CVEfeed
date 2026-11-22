@@ -5,8 +5,11 @@
  * in the URL fragment; this takes it, keeps it for this tab only, and strips
  * it from the address bar so it is not left in history or sent in a Referer.
  *
- * sessionStorage rather than localStorage: closing the tab signs you out of
- * this page, which is the right default for an account that can mint API keys.
+ * localStorage, bounded by the token's own expiry (an hour). It was
+ * sessionStorage, and that made every MCP client sign-in a GitHub round trip:
+ * a client opens the consent page in a fresh tab each time, and a fresh tab
+ * has an empty sessionStorage. The token lives no longer either way, and
+ * signing out clears it.
  *
  * The page supplies its Supabase Auth URL in <meta name="cvefeed-auth">. The
  * publishable key is not needed here - /authorize takes none.
@@ -16,14 +19,25 @@
   var meta = document.querySelector('meta[name="cvefeed-auth"]');
   var AUTH = meta ? meta.getAttribute('content') : '';
 
+  var memory = null; // when storage is refused: signed in for this page load only
+
   function read() {
-    try { return JSON.parse(sessionStorage.getItem(KEY) || 'null'); } catch (e) { return null; }
+    try {
+      var stored = localStorage.getItem(KEY);
+      if (!stored) {
+        // A tab signed in before the move to localStorage keeps its session.
+        stored = sessionStorage.getItem(KEY);
+        if (stored) { localStorage.setItem(KEY, stored); sessionStorage.removeItem(KEY); }
+      }
+      return stored ? JSON.parse(stored) : memory;
+    } catch (e) { return memory; }
   }
   function write(value) {
+    memory = value || null;
     try {
-      if (value) sessionStorage.setItem(KEY, JSON.stringify(value));
-      else sessionStorage.removeItem(KEY);
-    } catch (e) { /* private mode: signed in for this page load only */ }
+      if (value) localStorage.setItem(KEY, JSON.stringify(value));
+      else { localStorage.removeItem(KEY); sessionStorage.removeItem(KEY); }
+    } catch (e) { /* private mode: the in-memory copy above stands in */ }
   }
 
   (function claim() {

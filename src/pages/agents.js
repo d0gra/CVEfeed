@@ -21,6 +21,7 @@
  *              OpenCode   opencode mcp add --url
  *              OpenClaw   openclaw mcp add --url --transport streamable-http, then login
  *              Codex      codex mcp add --url, then login
+ *              Copilot    copilot mcp add --transport http (its own list; VS Code's mcp.json is not read)
  *   config     Hermes     ~/.hermes/config.yaml, mcp_servers with auth: oauth
  *              Zed        settings.json, context_servers with a url and no auth header
  *
@@ -41,6 +42,8 @@ const TOOLS = [
   ['get_exploits', 'Can this be exploited, and with what: Metasploit, Exploit-DB, Nuclei, PoC repositories.'],
   ['list_exploited', 'What CISA confirms is exploited in the wild, optionally only the AI stack.'],
   ['feed_status', 'What is stored and which sources answered, so an empty result can be read correctly.'],
+  ['research_vulnerability', 'Looks up a nickname or anything too new for the registers on the web, so the model can find the CVE IDs.'],
+  ['account', 'Who you are signed in as, and what is left of your hourly allowance.'],
 ];
 
 const base64Json = (value) => encodeURIComponent(Buffer.from(JSON.stringify(value)).toString('base64'));
@@ -52,7 +55,7 @@ function installTargets(endpoint) {
     {
       id: 'vscode', group: 'click', label: 'VS Code',
       href: `vscode:mcp/install?${encodeURIComponent(JSON.stringify(vscode))}`,
-      hint: 'Opens VS Code to review and install.',
+      hint: "Opens VS Code to review and install, for VS Code's own Agent mode in Chat.",
     },
     {
       id: 'cursor', group: 'click', label: 'Cursor',
@@ -68,6 +71,13 @@ function installTargets(endpoint) {
       id: 'claude', group: 'copy', label: 'Claude',
       copy: `claude mcp add --transport http ${SERVER_NAME} ${endpoint}`,
       hint: 'Copies the Claude Code command. On claude.ai, add the URL under Customize, Connectors.',
+    },
+    {
+      // Its own list, separate from VS Code's: the Copilot CLI agent - in a
+      // terminal or as an agent inside VS Code Chat - does not read mcp.json.
+      id: 'copilot', group: 'copy', label: 'Copilot CLI',
+      copy: `copilot mcp add --transport http ${SERVER_NAME} ${endpoint}`,
+      hint: 'Copies the GitHub Copilot CLI command. Also what the Copilot CLI agent in VS Code Chat uses.',
     },
     {
       id: 'opencode', group: 'copy', label: 'OpenCode',
@@ -116,6 +126,17 @@ function installSection(endpoint) {
         <div class="install-grid">${group('copy')}</div>
       </div>
       <p class="install-status" id="install-status" role="status"></p>
+      <details class="install-help">
+        <summary>Installed, but your chat can't see the tools?</summary>
+        <p>Each agent keeps its own list of servers. The VS Code button adds this server to
+           <strong>VS Code's own</strong> agent: pick <em>Agent</em> in the Chat view's agent menu,
+           and the tools show up under the tools icon. If your chat runs the <em>Copilot CLI</em>
+           agent instead, it never reads VS Code's list. Run the Copilot CLI command above once, in a
+           terminal, and that agent will have it too.</p>
+        <p>The first connection opens your browser to sign in. Allow VS Code to open the page,
+           sign in with GitHub, then press <em>Allow</em>. After that, the client renews the sign-in
+           on its own.</p>
+      </details>
       <div class="endpoint">
         <span class="endpoint-label">Or use the URL in any client</span>
         <div class="copy-row">
@@ -197,7 +218,7 @@ export function agentsPage({ origin, canonical, assetVersion, stats }) {
     ${connect}
 
     <section class="block">
-      <h2>Six tools</h2>
+      <h2>${TOOLS.length} tools</h2>
       <ul class="tool-list">${tools}</ul>
     </section>
 

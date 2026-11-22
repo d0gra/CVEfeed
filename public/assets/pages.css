@@ -629,3 +629,8 @@
 /* A long endpoint wraps rather than scrolls: on a phone a horizontal scrollbar
    took the whole height of the box and hid the URL it was there to show. */
 .copy-row code { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+
+/* "Installed, but the chat can't see it" - the one question every client raises. */
+.install-help { margin: 4px 0 14px; font-size: 13px; color: var(--ink-soft, var(--ink-faint)); }
+.install-help summary { cursor: pointer; color: var(--ink); font-weight: 500; }
+.install-help p { margin: 8px 0 0; line-height: 1.55; }

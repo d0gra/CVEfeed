@@ -25,8 +25,12 @@ export const BRAND_PATHS = {
 
 const LETTERED = { hermes: 'H', openclaw: 'OC' };
 
+// GitHub Copilot CLI is GitHub's; it wears GitHub's mark rather than a lettered badge.
+const ALIASES = { copilot: 'github' };
+
 export function brandIcon(name, label = '') {
   const a11y = label ? `role="img" aria-label="${label}"` : 'aria-hidden="true"';
+  name = ALIASES[name] ?? name;
   if (BRAND_PATHS[name]) {
     return `<svg class="brand-icon" viewBox="0 0 24 24" width="18" height="18" ${a11y}><path fill="currentColor" d="${BRAND_PATHS[name]}"/></svg>`;
   }
